@@ -66,6 +66,7 @@ struct MaterialInputs {
 
 #if defined(MATERIAL_HAS_POST_LIGHTING_COLOR)
     vec4  postLightingColor;
+    float postLightingMixFactor;
 #endif
 
 #if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_UNLIT)
@@ -88,6 +89,15 @@ struct MaterialInputs {
 #endif
 #endif
 #endif
+
+#if defined(MATERIAL_HAS_SPECULAR_FACTOR)
+    float specularFactor;
+#endif
+
+#if defined(MATERIAL_HAS_SPECULAR_COLOR_FACTOR)
+    vec3 specularColorFactor;
+#endif
+
 };
 
 void initMaterial(out MaterialInputs material) {
@@ -153,6 +163,7 @@ void initMaterial(out MaterialInputs material) {
 
 #if defined(MATERIAL_HAS_POST_LIGHTING_COLOR)
     material.postLightingColor = vec4(0.0);
+    material.postLightingMixFactor = 1.0;
 #endif
 
 #if !defined(SHADING_MODEL_CLOTH) && !defined(SHADING_MODEL_SUBSURFACE) && !defined(SHADING_MODEL_UNLIT)
@@ -175,6 +186,15 @@ void initMaterial(out MaterialInputs material) {
 #endif
 #endif
 #endif
+
+#if defined(MATERIAL_HAS_SPECULAR_FACTOR)
+    material.specularFactor = 1.0;
+#endif
+
+#if defined(MATERIAL_HAS_SPECULAR_COLOR_FACTOR)
+    material.specularColorFactor = vec3(1.0);
+#endif
+
 }
 
 #if defined(MATERIAL_HAS_CUSTOM_SURFACE_SHADING)

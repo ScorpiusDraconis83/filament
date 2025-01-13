@@ -16,7 +16,9 @@
 
 #include "VulkanStagePool.h"
 
+#include "VulkanCommands.h"
 #include "VulkanConstants.h"
+#include "VulkanImageUtility.h"
 #include "VulkanMemory.h"
 #include "VulkanUtility.h"
 
@@ -26,10 +28,9 @@ static constexpr uint32_t TIME_BEFORE_EVICTION = FVK_MAX_COMMAND_BUFFERS;
 
 namespace filament::backend {
 
-void VulkanStagePool::initialize(VmaAllocator allocator, VulkanCommands* commands) noexcept {
-    mAllocator = allocator;
-    mCommands = commands;
-}
+VulkanStagePool::VulkanStagePool(VmaAllocator allocator, VulkanCommands* commands)
+    : mAllocator(allocator),
+      mCommands(commands) {}
 
 VulkanStage const* VulkanStagePool::acquireStage(uint32_t numBytes) {
     // First check if a stage exists whose capacity is greater than or equal to the requested size.
@@ -37,6 +38,7 @@ VulkanStage const* VulkanStagePool::acquireStage(uint32_t numBytes) {
     if (iter != mFreeStages.end()) {
         auto stage = iter->second;
         mFreeStages.erase(iter);
+        stage->lastAccessed = mCurrentFrame;
         mUsedStages.insert(stage);
         return stage;
     }
@@ -59,9 +61,9 @@ VulkanStage const* VulkanStagePool::acquireStage(uint32_t numBytes) {
     UTILS_UNUSED_IN_RELEASE VkResult result = vmaCreateBuffer(mAllocator, &bufferInfo,
             &allocInfo, &stage->buffer, &stage->memory, nullptr);
 
-#if FVK_ENABLED(FVK_DEBUG_ALLOCATION)
+#if FVK_ENABLED(FVK_DEBUG_STAGING_ALLOCATION)
     if (result != VK_SUCCESS) {
-        utils::slog.e << "Allocation error: " << result << utils::io::endl;
+        FVK_LOGE << "Allocation error: " << result << utils::io::endl;
     }
 #endif
 
@@ -74,6 +76,7 @@ VulkanStageImage const* VulkanStagePool::acquireImage(PixelDataFormat format, Pi
     for (auto image : mFreeImages) {
         if (image->format == vkformat && image->width == width && image->height == height) {
             mFreeImages.erase(image);
+            image->lastAccessed = mCurrentFrame;
             mUsedImages.insert(image);
             return image;
         }
@@ -119,7 +122,7 @@ VulkanStageImage const* VulkanStagePool::acquireImage(PixelDataFormat format, Pi
     // VK_IMAGE_LAYOUT_PREINITIALIZED or VK_IMAGE_LAYOUT_GENERAL layout. Calling
     // vkGetImageSubresourceLayout for a linear image returns a subresource layout mapping that is
     // valid for either of those image layouts."
-    VulkanImageUtility::transitionLayout(cmdbuffer, {
+    imgutil::transitionLayout(cmdbuffer, {
             .image = image->image,
             .oldLayout = VulkanLayout::UNDEFINED,
             .newLayout = VulkanLayout::READ_WRITE, // (= VK_IMAGE_LAYOUT_GENERAL)

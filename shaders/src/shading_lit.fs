@@ -37,8 +37,11 @@ float normalFiltering(float perceptualRoughness, const vec3 worldNormal) {
     vec3 du = dFdx(worldNormal);
     vec3 dv = dFdy(worldNormal);
 
-    float variance = materialParams._specularAntiAliasingVariance * (dot(du, du) + dot(dv, dv));
+    // specular AA factor to correct for resolution scaling (DSR and TAAx4)
+    du *= frameUniforms.derivativesScale.x;
+    dv *= frameUniforms.derivativesScale.y;
 
+    float variance = materialParams._specularAntiAliasingVariance * (dot(du, du) + dot(dv, dv));
     float roughness = perceptualRoughnessToRoughness(perceptualRoughness);
     float kernelRoughness = min(2.0 * variance, materialParams._specularAntiAliasingThreshold);
     float squareRoughness = saturate(roughness * roughness + kernelRoughness);
@@ -72,7 +75,21 @@ void getCommonPixelParams(const MaterialInputs material, inout PixelParams pixel
     // Assumes an interface from air to an IOR of 1.5 for dielectrics
     float reflectance = computeDielectricF0(material.reflectance);
 #endif
+#if !defined(MATERIAL_HAS_SPECULAR_FACTOR) && !defined(MATERIAL_HAS_SPECULAR_COLOR_FACTOR)
     pixel.f0 = computeF0(baseColor, material.metallic, reflectance);
+#else
+    vec3 dielectricSpecularF0 = vec3(0.0);
+    float dielectricSpecularF90 = 0.0;
+#if defined(MATERIAL_HAS_SPECULAR_COLOR_FACTOR)
+    dielectricSpecularF0 = min(reflectance * material.specularColorFactor, vec3(1.0));
+#endif
+#if defined(MATERIAL_HAS_SPECULAR_FACTOR)
+    dielectricSpecularF0 *= material.specularFactor;
+    dielectricSpecularF90 = material.specularFactor;
+#endif
+    pixel.f0 = baseColor.rgb * material.metallic + dielectricSpecularF0 * (1.0 - material.metallic);
+    pixel.f90 = material.metallic + dielectricSpecularF90 * (1.0 - material.metallic);
+#endif
 #else
     pixel.diffuseColor = baseColor.rgb;
     pixel.f0 = material.sheenColor;
@@ -117,6 +134,16 @@ void getCommonPixelParams(const MaterialInputs material, inout PixelParams pixel
     pixel.uThickness = 0.0;
 #endif
 #endif
+#endif
+}
+
+void getSpecularPixelParams(const MaterialInputs material, inout PixelParams pixel) {
+#if defined(MATERIAL_HAS_SPECULAR_FACTOR)
+    pixel.specular = material.specularFactor;
+#endif
+
+#if defined(MATERIAL_HAS_SPECULAR_COLOR_FACTOR)
+    pixel.specularColor = material.specularColorFactor;
 #endif
 }
 
@@ -229,6 +256,7 @@ void getEnergyCompensationPixelParams(inout PixelParams pixel) {
  * testing fails.
  */
 void getPixelParams(const MaterialInputs material, out PixelParams pixel) {
+    getSpecularPixelParams(material, pixel);
     getCommonPixelParams(material, pixel);
     getSheenPixelParams(material, pixel);
     getClearCoatPixelParams(material, pixel);

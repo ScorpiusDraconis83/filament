@@ -23,9 +23,9 @@
 
 #include <backend/PixelBufferDescriptor.h>
 
+#include <utils/CString.h>
 #include <utils/Panic.h>
 #include <filament/Stream.h>
-
 
 namespace filament {
 
@@ -80,17 +80,23 @@ FStream::FStream(FEngine& engine, const Builder& builder) noexcept
     } else {
         mStreamHandle = engine.getDriverApi().createStreamAcquired();
     }
+
+    if (auto name = builder.getName(); !name.empty()) {
+        engine.getDriverApi().setDebugTag(mStreamHandle.getId(), std::move(name));
+    }
 }
 
 void FStream::terminate(FEngine& engine) noexcept {
     engine.getDriverApi().destroyStream(mStreamHandle);
 }
 
-void FStream::setAcquiredImage(void* image, Callback callback, void* userdata) noexcept {
+void FStream::setAcquiredImage(void* image,
+        Callback callback, void* userdata) noexcept {
     mEngine.getDriverApi().setAcquiredImage(mStreamHandle, image, nullptr, callback, userdata);
 }
 
-void FStream::setAcquiredImage(void* image, CallbackHandler* handler, Callback callback, void* userdata) noexcept {
+void FStream::setAcquiredImage(void* image,
+        CallbackHandler* handler, Callback callback, void* userdata) noexcept {
     mEngine.getDriverApi().setAcquiredImage(mStreamHandle, image, handler, callback, userdata);
 }
 

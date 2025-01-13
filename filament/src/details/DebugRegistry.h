@@ -22,11 +22,16 @@
 #include <filament/DebugRegistry.h>
 
 #include <utils/compiler.h>
+#include <utils/Invocable.h>
+
+#include <math/mathfwd.h>
 
 #include <functional>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+
+#include <stddef.h>
 
 namespace filament {
 
@@ -34,6 +39,10 @@ class FEngine;
 
 class FDebugRegistry : public DebugRegistry {
 public:
+    enum Type {
+        BOOL, INT, FLOAT, FLOAT2, FLOAT3, FLOAT4
+    };
+
     FDebugRegistry() noexcept;
 
     void registerProperty(std::string_view name, bool* p) noexcept {
@@ -91,7 +100,14 @@ public:
         registerProperty(name, p, FLOAT4, std::move(fn));
     }
 
-    void registerDataSource(std::string_view name, void const* data, size_t count) noexcept;
+    // registers a DataSource directly
+    bool registerDataSource(std::string_view name, void const* data, size_t count) noexcept;
+
+    // registers a DataSource lazily
+    bool registerDataSource(std::string_view name,
+            utils::Invocable<DataSource()>&& creator) noexcept;
+
+    void unregisterDataSource(std::string_view name) noexcept;
 
 #if !defined(_MSC_VER)
 private:
@@ -109,7 +125,8 @@ private:
     void const* getPropertyAddress(const char* name) const noexcept;
     DataSource getDataSource(const char* name) const noexcept;
     std::unordered_map<std::string_view, PropertyInfo> mPropertyMap;
-    std::unordered_map<std::string_view, DataSource> mDataSourceMap;
+    mutable std::unordered_map<std::string_view, DataSource> mDataSourceMap;
+    mutable std::unordered_map<std::string_view, utils::Invocable<DataSource()>> mDataSourceCreatorMap;
 };
 
 FILAMENT_DOWNCAST(DebugRegistry)

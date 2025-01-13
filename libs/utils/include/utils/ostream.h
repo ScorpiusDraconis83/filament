@@ -92,13 +92,14 @@ protected:
         std::pair<char*, size_t> grow(size_t s) noexcept;
         void advance(ssize_t n) noexcept;
         void reset() noexcept;
+        size_t length() const noexcept;
 
     private:
-        void reserve(size_t newSize) noexcept;
+        void reserve(size_t newCapacity) noexcept;
 
         char* buffer = nullptr;     // buffer address
         char* curr = nullptr;       // current pointer
-        size_t size = 0;            // size remaining
+        size_t sizeRemaining = 0;            // size remaining
         size_t capacity = 0;        // total capacity of the buffer
     };
 

@@ -20,12 +20,16 @@
 #define TNT_FILAMENT_TEXTURE_H
 
 #include <filament/FilamentAPI.h>
+
 #include <backend/DriverEnums.h>
 #include <backend/PixelBufferDescriptor.h>
 
 #include <utils/compiler.h>
 
+#include <utility>
+
 #include <stddef.h>
+#include <stdint.h>
 
 namespace filament {
 
@@ -84,6 +88,9 @@ public:
     /** @return whether a backend supports a particular format. */
     static bool isTextureFormatSupported(Engine& engine, InternalFormat format) noexcept;
 
+    /** @return whether this backend supports protected textures. */
+    static bool isProtectedTexturesSupported(Engine& engine) noexcept;
+
     /** @return whether a backend supports texture swizzling. */
     static bool isTextureSwizzleSupported(Engine& engine) noexcept;
 
@@ -105,7 +112,7 @@ public:
 
 
     //! Use Builder to construct a Texture object instance
-    class Builder : public BuilderBase<BuilderDetails> {
+    class Builder : public BuilderBase<BuilderDetails>, public BuilderNameMixin<Builder> {
         friend struct BuilderDetails;
     public:
         Builder() noexcept;
@@ -196,18 +203,32 @@ public:
         Builder& swizzle(Swizzle r, Swizzle g, Swizzle b, Swizzle a) noexcept;
 
         /**
+         * Associate an optional name with this Texture for debugging purposes.
+         *
+         * name will show in error messages and should be kept as short as possible. The name is
+         * truncated to a maximum of 128 characters.
+         *
+         * The name string is copied during this method so clients may free its memory after
+         * the function returns.
+         *
+         * @param name A string to identify this Texture
+         * @param len Length of name, should be less than or equal to 128
+         * @return This Builder, for chaining calls.
+         */
+         // Builder& name(const char* UTILS_NONNULL name, size_t len) noexcept; // inherited
+
+        /**
          * Creates the Texture object and returns a pointer to it.
          *
          * @param engine Reference to the filament::Engine to associate this Texture with.
          *
-         * @return pointer to the newly created object or nullptr if exceptions are disabled and
-         *         an error occurred.
+         * @return pointer to the newly created object.
          *
          * @exception utils::PostConditionPanic if a runtime error occurred, such as running out of
          *            memory or other resources.
          * @exception utils::PreConditionPanic if a parameter to a builder function was invalid.
          */
-        Texture* build(Engine& engine);
+        Texture* UTILS_NONNULL build(Engine& engine);
 
         /* no user serviceable parts below */
 
@@ -239,6 +260,18 @@ public:
          * @return This Builder, for chaining calls.
          */
         Builder& import(intptr_t id) noexcept;
+
+        /**
+         * Creates an external texture. The content must be set using setExternalImage().
+         * The sampler can be SAMPLER_EXTERNAL or SAMPLER_2D depending on the format. Generally
+         * YUV formats must use SAMPLER_EXTERNAL. This depends on the backend features and is not
+         * validated.
+         *
+         * If the Sampler is set to SAMPLER_EXTERNAL, external() is implied.
+         *
+         * @return
+         */
+        Builder& external() noexcept;
 
     private:
         friend class FTexture;
@@ -374,7 +407,7 @@ public:
 
 
     /**
-     * Specify the external image to associate with this Texture. Typically the external
+     * Specify the external image to associate with this Texture. Typically, the external
      * image is OS specific, and can be a video or camera frame.
      * There are many restrictions when using an external image as a texture, such as:
      *   - only the level of detail (lod) 0 can be specified
@@ -396,10 +429,10 @@ public:
      * @see Builder::sampler()
      *
      */
-    void setExternalImage(Engine& engine, void* image) noexcept;
+    void setExternalImage(Engine& engine, void* UTILS_NONNULL image) noexcept;
 
     /**
-     * Specify the external image and plane to associate with this Texture. Typically the external
+     * Specify the external image and plane to associate with this Texture. Typically, the external
      * image is OS specific, and can be a video or camera frame. When using this method, the
      * external image must be a planar type (such as a YUV camera frame). The plane parameter
      * selects which image plane is bound to this texture.
@@ -427,7 +460,7 @@ public:
      *                      kCVPixelFormatType_420YpCbCr8BiPlanarFullRange images. On platforms
      *                      other than iOS, this method is a no-op.
      */
-    void setExternalImage(Engine& engine, void* image, size_t plane) noexcept;
+    void setExternalImage(Engine& engine, void* UTILS_NONNULL image, size_t plane) noexcept;
 
     /**
      * Specify the external stream to associate with this Texture. Typically the external
@@ -446,7 +479,7 @@ public:
      * @see Builder::sampler(), Stream
      *
      */
-    void setExternalStream(Engine& engine, Stream* stream) noexcept;
+    void setExternalStream(Engine& engine, Stream* UTILS_NULLABLE stream) noexcept;
 
     /**
      * Generates all the mipmap levels automatically. This requires the texture to have a
@@ -496,7 +529,7 @@ public:
      */
     void generatePrefilterMipmap(Engine& engine,
             PixelBufferDescriptor&& buffer, const FaceOffsets& faceOffsets,
-            PrefilterOptions const* options = nullptr);
+            PrefilterOptions const* UTILS_NULLABLE options = nullptr);
 
 
     /** @deprecated */

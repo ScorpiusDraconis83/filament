@@ -16,19 +16,39 @@
 
 #include "ShadowMap.h"
 
-#include "RenderPass.h"
+#include <filament/Box.h>
+#include <filament/Frustum.h>
+#include <filament/LightManager.h>
 
 #include "components/LightManager.h"
 
+#include "details/DebugRegistry.h"
 #include "details/Engine.h"
 #include "details/Scene.h"
 
+#include <backend/DriverApiForward.h>
 #include <backend/DriverEnums.h>
 
+#include <utils/compiler.h>
 #include <utils/debug.h>
+#include <utils/Entity.h>
+#include <utils/Slice.h>
 #include <utils/Systrace.h>
 
+#include <math/vec3.h>
+#include <math/vec4.h>
+#include <math/mat3.h>
+#include <math/mat4.h>
+#include <math/scalar.h>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <limits>
+#include <type_traits>
+
+#include <stddef.h>
+#include <stdint.h>
 
 using namespace utils;
 
@@ -36,9 +56,6 @@ namespace filament {
 
 using namespace math;
 using namespace backend;
-
-// do this only if depth-clamp is available
-static constexpr bool USE_DEPTH_CLAMP = false;
 
 ShadowMap::ShadowMap(FEngine& engine) noexcept
         : mPerShadowMapUniforms(engine),
@@ -106,7 +123,8 @@ ShadowMap::ShaderParameters ShadowMap::updateDirectional(FEngine& engine,
         FScene::LightSoa const& lightData, size_t index,
         filament::CameraInfo const& camera,
         ShadowMapInfo const& shadowMapInfo,
-        SceneInfo const& sceneInfo) noexcept {
+        SceneInfo const& sceneInfo,
+        bool useDepthClamp) noexcept {
 
     // reset the visible shadow status
     mHasVisibleShadows = false;
@@ -117,10 +135,17 @@ ShadowMap::ShaderParameters ShadowMap::updateDirectional(FEngine& engine,
 
     const auto direction = lightData.elementAt<FScene::SHADOW_DIRECTION>(index);
 
-    auto [Mv, znear, zfar, lsClippedShadowVolume, vertexCount, visibleShadows] =
-            computeDirectionalShadowBounds(engine, direction, params, camera, sceneInfo);
+    auto const [Mv, znear, zfar, lsClippedShadowVolume, vertexCount, visibleShadows] =
+            computeDirectionalShadowBounds(engine, direction, params, camera, sceneInfo,
+                    useDepthClamp);
 
     if (UTILS_UNLIKELY(!visibleShadows)) {
+        return {};
+    }
+
+    // if the 2D bounds of the intersection is empty seen from the light, we have no shadow
+    Aabb const bounds = compute2DBounds(Mv, lsClippedShadowVolume.data(), vertexCount);
+    if (UTILS_UNLIKELY(!(bounds.min.x < bounds.max.x && bounds.min.y < bounds.max.y))) {
         return {};
     }
 
@@ -141,12 +166,17 @@ ShadowMap::ShaderParameters ShadowMap::updateDirectional(FEngine& engine,
     mat4f W, Wp, L;
     // We can't use LISPSM in stable mode
     const bool useLispsm = params.options.lispsm && !params.options.stable;
-    if (useLispsm) {
+
+    if (useLispsm ||
+            (!params.options.stable && !engine.debug.shadowmap.disable_light_frustum_align)) {
         // Orient the shadow map in the direction of the view vector by constructing a
         const float3 lsCameraFwd = Mv.upperLeft() * camera.getForwardVector();
         L = computeLightRotation(lsCameraFwd);
         LMp = L * Mp;
         LMpMv = LMp * Mv;
+    }
+
+    if (useLispsm) {
         W = applyLISPSM(Wp, camera, params,
                 LMp, Mv, LMpMv, lsClippedShadowVolume, vertexCount, direction);
     }
@@ -164,8 +194,7 @@ ShadowMap::ShaderParameters ShadowMap::updateDirectional(FEngine& engine,
     //   In LiPSM mode, we're using the warped space here.
     float4 f = computeFocusParams(LMpMv, WLMp,
             lsClippedShadowVolume, vertexCount,
-            camera, sceneInfo.csNearFar,
-            params.options.shadowFar, params.options.stable);
+            camera, params.options.shadowFar, params.options.stable);
 
     if (params.options.stable) {
         const auto lsRef = lightData.elementAt<FScene::SHADOW_REF>(index);
@@ -239,7 +268,8 @@ ShadowMap::ShaderParameters ShadowMap::updateDirectional(FEngine& engine,
 ShadowMap::ShaderParameters ShadowMap::updatePunctual(
         mat4f const& Mv, float outerConeAngle, float nearPlane, float farPlane,
         const ShadowMapInfo& shadowMapInfo, const FLightManager::ShadowParams& params) noexcept {
-    const mat4f Mp = mat4f::perspective(outerConeAngle * f::RAD_TO_DEG * 2.0f, 1.0f, nearPlane, farPlane);
+    const mat4f Mp = mat4f::perspective(
+            outerConeAngle * f::RAD_TO_DEG * 2.0f, 1.0f, nearPlane, farPlane);
 
     assert_invariant(shadowMapInfo.textureDimension == mOptions->mapSize);
 
@@ -365,7 +395,8 @@ ShadowMap::DirectionalShadowBounds ShadowMap::computeDirectionalShadowBounds(
         float3 const direction,
         FLightManager::ShadowParams params,
         filament::CameraInfo const& camera,
-        SceneInfo const& sceneInfo) noexcept {
+        SceneInfo const& sceneInfo,
+        bool useDepthClamp) noexcept {
 
     // we use aligned_storage<> here to avoid the default initialization of std::array<>
     using Storage = std::aligned_storage<sizeof(FrustumBoxIntersection)>::type;
@@ -427,36 +458,49 @@ ShadowMap::DirectionalShadowBounds ShadowMap::computeDirectionalShadowBounds(
 
     // Compute the intersection of the view volume with the intersection of receivers and casters
     // in light space. This returns a set of points on the convex-hull of the intersection.
+    mat4f const projection = camera.cullingProjection *
+            (camera.view * FCamera::rigidTransformInverse(MvAtOrigin));
     size_t const vertexCount = intersectFrustumWithBox(lsClippedShadowVolume,
-            camera.cullingProjection * camera.view * FCamera::rigidTransformInverse(MvAtOrigin),
-            sceneInfo.csNearFar, lsLightFrustumBounds);
+            projection, lsLightFrustumBounds);
 
     if (UTILS_UNLIKELY(vertexCount < 4)) {
         return {};
     }
 
     /*
-    * Adjust the scene's zmax (i.e. Near plane) and zmin (i.e. Far plane) in light space.
-    * (near/far correspond to max/min because the light looks down the -z axis).
-    *  - The Near plane is set to the shadow casters max z (i.e. closest to the light)
-    *  - The Far plane is set to the closest of the farthest shadow casters and receivers
-    *    i.e.: shadow casters behind the last receivers can't cast any shadows
-    *
-    *  If "depth clamp" is supported, we can further tighten the near plane to the
-    *  shadow receiver.
-    *
-    *  Note: L has no influence here, since we're only interested in z values
-    *        (L is a rotation around z)
-    */
+     * Adjust the scene's zmax (i.e. Near plane) and zmin (i.e. Far plane) in light space.
+     * (near/far correspond to max/min because the light looks down the -z axis).
+     *
+     *   - For the Far plane, the light frustum is already set to the closest of receivers and
+     *     casters (i.e.: shadow casters behind the last receivers can't cast any shadows).
+     *     But it can be moved closer up to the farthest point in the camera frustum & light
+     *     frustum intersection.
+     *
+     *  - The Near plane is already set to the shadow casters max z (i.e. closest to the light)
+     *
+     *  If "depth clamp" is supported, we can further tighten the near plane to the
+     *  shadow receiver (i.e. to the closest point of camera frustum & light frustum intersection).
+     *
+     *  Note: L has no influence here, since we're only interested in z values
+     *        (L is a rotation around z)
+     */
 
+    float lsClippedShadowVolumeFarthest = std::numeric_limits<float>::max();
+    float lsClippedShadowVolumeNearest = std::numeric_limits<float>::lowest();
     for (size_t i = 0; i < vertexCount; ++i) {
         float3 const v = lsClippedShadowVolume[i];
-        // far: figure out the farthest shadow receivers
-        lsLightFrustumBounds.min.z = min(lsLightFrustumBounds.min.z, v.z);
-        if constexpr (USE_DEPTH_CLAMP) {
-            lsLightFrustumBounds.max.z = max(lsLightFrustumBounds.max.z, v.z);
-        }
+        lsClippedShadowVolumeFarthest = std::min(lsClippedShadowVolumeFarthest, v.z);
+        lsClippedShadowVolumeNearest = std::max(lsClippedShadowVolumeNearest, v.z);
     }
+
+    lsLightFrustumBounds.min.z =
+            std::max(lsLightFrustumBounds.min.z, lsClippedShadowVolumeFarthest);
+
+    if (useDepthClamp) {
+        lsLightFrustumBounds.max.z =
+                std::min(lsLightFrustumBounds.max.z, lsClippedShadowVolumeNearest);
+    }
+
     if (engine.debug.shadowmap.far_uses_shadowcasters) {
         // far: closest of the farthest shadow casters and receivers
         lsLightFrustumBounds.min.z =
@@ -590,7 +634,7 @@ math::float4 ShadowMap::computeFocusParams(
         mat4f const& LMpMv,
         mat4f const& WLMp,
         FrustumBoxIntersection const& lsShadowVolume, size_t vertexCount,
-        filament::CameraInfo const& camera, float2 const& csNearFar,
+        filament::CameraInfo const& camera,
         float shadowFar, bool stable) noexcept {
     float2 s, o;
     if (stable) {
@@ -605,7 +649,7 @@ math::float4 ShadowMap::computeFocusParams(
                 return wsViewVolumeBoundingSphere;
             } else {
                 mat4f const viewFromClip = inverse(camera.cullingProjection);
-                Corners const wsFrustumVertices = computeFrustumCorners(viewFromClip, csNearFar);
+                Corners const wsFrustumVertices = computeFrustumCorners(viewFromClip);
                 float4 const wsViewVolumeBoundingSphere =
                         computeBoundingSphere(wsFrustumVertices.vertices, 8);
                 return wsViewVolumeBoundingSphere;
@@ -773,26 +817,25 @@ Aabb ShadowMap::compute2DBounds(const mat4f& lightView,
 }
 
 ShadowMap::Corners ShadowMap::computeFrustumCorners(
-        mat4f const& projectionInverse,
-        float2 csNearFar) noexcept {
+        mat4f const& projectionInverse) noexcept {
 
     Corners out;
 
     // compute view frustum in world space (from its NDC)
     // matrix to convert: ndc -> camera -> world
-    float const near = csNearFar.x;
-    float const far  = csNearFar.y;
+    float const near = -1.0f;
+    float const far  =  1.0f;
 
     Corners const csViewFrustumCorners = {
             .vertices = {
                     { -1, -1, far  },
-                    { 1,  -1, far  },
-                    { -1, 1,  far  },
-                    { 1,  1,  far  },
+                    {  1, -1, far  },
+                    { -1,  1, far  },
+                    {  1,  1, far  },
                     { -1, -1, near },
-                    { 1,  -1, near },
-                    { -1, 1,  near },
-                    { 1,  1,  near },
+                    {  1, -1, near },
+                    { -1,  1, near },
+                    {  1,  1, near },
             }
     };
 
@@ -874,11 +917,11 @@ void ShadowMap::snapLightFrustum(float2& s, float2& o,
 
 size_t ShadowMap::intersectFrustumWithBox(
         FrustumBoxIntersection& UTILS_RESTRICT outVertices,
-        mat4f const& UTILS_RESTRICT projection, math::float2 const& UTILS_RESTRICT csNearFar,
+        mat4f const& UTILS_RESTRICT projection,
         Aabb const& UTILS_RESTRICT box)
 {
     Frustum const frustum{ projection };
-    Corners const frustumVertices{ computeFrustumCorners(inverse(projection), csNearFar) };
+    Corners const frustumVertices{ computeFrustumCorners(inverse(projection)) };
 
     constexpr const float EPSILON = 1.0f / 8192.0f; // ~0.012 mm
     size_t vertexCount = 0;
@@ -1182,12 +1225,11 @@ void ShadowMap::visitScene(const FScene& scene, uint32_t visibleLayers,
 }
 
 ShadowMap::SceneInfo::SceneInfo(
-        FScene const& scene, uint8_t visibleLayers, mat4f const& viewMatrix) noexcept
-        : vsNearFar(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::max()),
-          visibleLayers(visibleLayers) {
+        FScene const& scene, uint8_t visibleLayers) noexcept
+        : visibleLayers(visibleLayers) {
 
     // the code below only works with affine transforms
-    assert_invariant(transpose(viewMatrix)[3] == float4(0, 0, 0, 1));
+    // Filament's API requires viewMatrix to be rigid (and thus affine).
 
     // We assume the light is at the origin to compute the SceneInfo. This is consumed later by
     // computeShadowCameraDirectional() which takes this into account.
@@ -1203,9 +1245,6 @@ ShadowMap::SceneInfo::SceneInfo(
             [&](Aabb receiver, Culler::result_type) {
                 wsShadowReceiversVolume.min = min(wsShadowReceiversVolume.min, receiver.min);
                 wsShadowReceiversVolume.max = max(wsShadowReceiversVolume.max, receiver.max);
-                auto r = Aabb::transform(viewMatrix.upperLeft(), viewMatrix[3].xyz, receiver);
-                vsNearFar.x = std::max(vsNearFar.x, r.max.z);
-                vsNearFar.y = std::min(vsNearFar.y, r.min.z);
             }
     );
 }
@@ -1257,6 +1296,10 @@ void ShadowMap::updateSceneInfoSpot(mat4f const& Mv, FScene const& scene,
             }
     );
 }
+void ShadowMap::setAllocation(uint8_t layer, backend::Viewport viewport) noexcept {
+    mLayer = layer;
+    mOffset = { viewport.left, viewport.bottom };
+}
 
 backend::Viewport ShadowMap::getViewport() const noexcept {
     // We set a viewport with a 1-texel border for when we index outside the texture.
@@ -1266,7 +1309,7 @@ backend::Viewport ShadowMap::getViewport() const noexcept {
     // can work properly if the shadowmap is in an atlas (and we can't rely on h/w clamp).
     const uint32_t dim = mOptions->mapSize;
     const uint16_t border = 1u;
-    return { border, border, dim - 2u * border, dim - 2u * border };
+    return { mOffset.x + border, mOffset.y + border, dim - 2u * border, dim - 2u * border };
 }
 
 backend::Viewport ShadowMap::getScissor() const noexcept {
@@ -1280,10 +1323,10 @@ backend::Viewport ShadowMap::getScissor() const noexcept {
     const uint16_t border = 1u;
     switch (mShadowType) {
         case ShadowType::DIRECTIONAL:
-            return { border, border, dim - 2u * border, dim - 2u * border };
+            return { mOffset.x + border, mOffset.y + border, dim - 2u * border, dim - 2u * border };
         case ShadowType::SPOT:
         case ShadowType::POINT:
-            return { 0, 0, dim, dim };
+            return { mOffset.x, mOffset.y, dim, dim };
     }
 }
 
@@ -1306,8 +1349,8 @@ math::float4 ShadowMap::getClampToEdgeCoords(ShadowMapInfo const& shadowMapInfo)
 
     float const texel = 1.0f / float(shadowMapInfo.atlasDimension);
     float const dim = float(mOptions->mapSize);
-    float const l = border;
-    float const b = border;
+    float const l = float(mOffset.x) + border;
+    float const b = float(mOffset.y) + border;
     float const w = dim - 2.0f * border;
     float const h = dim - 2.0f * border;
     float4 const v = float4{ l, b, l + w, b + h } * texel;
@@ -1322,33 +1365,33 @@ math::float4 ShadowMap::getClampToEdgeCoords(ShadowMapInfo const& shadowMapInfo)
 // ------------------------------------------------------------------------------------------------
 
 void ShadowMap::prepareCamera(Transaction const& transaction,
-        FEngine& engine, const CameraInfo& cameraInfo) noexcept {
-    PerShadowMapUniforms::prepareCamera(transaction, engine, cameraInfo);
-    PerShadowMapUniforms::prepareLodBias(transaction, 0.0f);
+        backend::DriverApi& driver, const CameraInfo& cameraInfo) noexcept {
+    ShadowMapDescriptorSet::prepareCamera(transaction, driver, cameraInfo);
+    ShadowMapDescriptorSet::prepareLodBias(transaction, 0.0f);
 }
 
 void ShadowMap::prepareViewport(Transaction const& transaction,
         backend::Viewport const& viewport) noexcept {
-    PerShadowMapUniforms::prepareViewport(transaction, viewport);
+    ShadowMapDescriptorSet::prepareViewport(transaction, viewport);
 }
 
 void ShadowMap::prepareTime(Transaction const& transaction,
-        FEngine& engine, math::float4 const& userTime) noexcept {
-    PerShadowMapUniforms::prepareTime(transaction, engine, userTime);
+        FEngine const& engine, math::float4 const& userTime) noexcept {
+    ShadowMapDescriptorSet::prepareTime(transaction, engine, userTime);
 }
 
 void ShadowMap::prepareShadowMapping(Transaction const& transaction,
         bool highPrecision) noexcept {
-    PerShadowMapUniforms::prepareShadowMapping(transaction, highPrecision);
+    ShadowMapDescriptorSet::prepareShadowMapping(transaction, highPrecision);
 }
 
-PerShadowMapUniforms::Transaction ShadowMap::open(DriverApi& driver) noexcept {
-    return PerShadowMapUniforms::open(driver);
+ShadowMapDescriptorSet::Transaction ShadowMap::open(DriverApi& driver) noexcept {
+    return ShadowMapDescriptorSet::open(driver);
 }
 
 void ShadowMap::commit(Transaction& transaction,
-        backend::DriverApi& driver) const noexcept {
-    mPerShadowMapUniforms.commit(transaction, driver);
+        FEngine& engine, backend::DriverApi& driver) const noexcept {
+    mPerShadowMapUniforms.commit(transaction, engine, driver);
 }
 
 void ShadowMap::bind(backend::DriverApi& driver) const noexcept {
