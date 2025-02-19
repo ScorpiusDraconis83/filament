@@ -16,17 +16,17 @@
 
 #include "details/DebugRegistry.h"
 
+#include <utils/compiler.h>
+#include <utils/Invocable.h>
 #include <utils/Panic.h>
 
 #include <math/vec2.h>
 #include <math/vec3.h>
 #include <math/vec4.h>
 
-#ifndef NDEBUG
-#   define DEBUG_PROPERTIES_WRITABLE true
-#else
-#   define DEBUG_PROPERTIES_WRITABLE false
-#endif
+#include <functional>
+#include <string_view>
+#include <utility>
 
 using namespace filament::math;
 using namespace utils;
@@ -59,7 +59,7 @@ void const* FDebugRegistry::getPropertyAddress(const char* name) const noexcept 
     return info.first;
 }
 
-void FDebugRegistry::registerProperty(std::string_view name, void* p, Type,
+void FDebugRegistry::registerProperty(std::string_view const name, void* p, Type,
         std::function<void()> fn) noexcept {
     auto& propertyMap = mPropertyMap;
     if (propertyMap.find(name) == propertyMap.end()) {
@@ -73,17 +73,15 @@ bool FDebugRegistry::hasProperty(const char* name) const noexcept {
 
 template<typename T>
 bool FDebugRegistry::setProperty(const char* name, T v) noexcept {
-    if constexpr (DEBUG_PROPERTIES_WRITABLE) {
-        auto info = getPropertyInfo(name);
-        T* const addr = static_cast<T*>(info.first);
-        if (addr) {
-            auto old = *addr;
-            *addr = v;
-            if (info.second && old != v) {
-                info.second();
-            }
-            return true;
+    auto info = getPropertyInfo(name);
+    T* const addr = static_cast<T*>(info.first);
+    if (addr) {
+        auto old = *addr;
+        *addr = v;
+        if (info.second && old != v) {
+            info.second();
         }
+        return true;
     }
     return false;
 }
@@ -112,20 +110,46 @@ template bool FDebugRegistry::getProperty<float2>(const char* name, float2* v) c
 template bool FDebugRegistry::getProperty<float3>(const char* name, float3* v) const noexcept;
 template bool FDebugRegistry::getProperty<float4>(const char* name, float4* v) const noexcept;
 
-void FDebugRegistry::registerDataSource(std::string_view name,
-        void const* data, size_t count) noexcept {
+bool FDebugRegistry::registerDataSource(std::string_view const name,
+        void const* data, size_t const count) noexcept {
     auto& dataSourceMap = mDataSourceMap;
-    if (dataSourceMap.find(name) == dataSourceMap.end()) {
+    bool const found = dataSourceMap.find(name) == dataSourceMap.end();
+    if (found) {
         dataSourceMap[name] = { data, count };
     }
+    return found;
 }
+
+bool FDebugRegistry::registerDataSource(std::string_view const name,
+        Invocable<DataSource()>&& creator) noexcept {
+    auto& dataSourceCreatorMap = mDataSourceCreatorMap;
+    bool const found = dataSourceCreatorMap.find(name) == dataSourceCreatorMap.end();
+    if (found) {
+        dataSourceCreatorMap[name] = std::move(creator);
+    }
+    return found;
+}
+
+void FDebugRegistry::unregisterDataSource(std::string_view const name) noexcept {
+    mDataSourceCreatorMap.erase(name);
+    mDataSourceMap.erase(name);
+}
+
 
 DebugRegistry::DataSource FDebugRegistry::getDataSource(const char* name) const noexcept {
     std::string_view const key{ name };
     auto& dataSourceMap = mDataSourceMap;
     auto const& it = dataSourceMap.find(key);
-    if (it == dataSourceMap.end()) {
-        return { nullptr, 0u };
+    if (UTILS_UNLIKELY(it == dataSourceMap.end())) {
+        auto& dataSourceCreatorMap = mDataSourceCreatorMap;
+        auto const& pos = dataSourceCreatorMap.find(key);
+        if (pos == dataSourceCreatorMap.end()) {
+            return { nullptr, 0u };
+        }
+        DataSource dataSource{ pos->second() };
+        dataSourceMap[key] = dataSource;
+        dataSourceCreatorMap.erase(pos);
+        return dataSource;
     }
     return it->second;
 }

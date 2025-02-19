@@ -18,14 +18,17 @@
 #define TNT_FILAMENT_BACKEND_VULKANCONTEXT_H
 
 #include "VulkanConstants.h"
-#include "VulkanImageUtility.h"
-#include "VulkanPipelineCache.h"
-#include "VulkanUtility.h"
+#include "vulkan/utils/Image.h"
+#include "vulkan/utils/Definitions.h"
+
+#include "vulkan/memory/ResourcePointer.h"
 
 #include <utils/bitset.h>
 #include <utils/FixedCapacityVector.h>
 #include <utils/Mutex.h>
 #include <utils/Slice.h>
+
+#include <bluevk/BlueVK.h>
 
 #include <memory>
 
@@ -42,16 +45,19 @@ struct VulkanTimerQuery;
 struct VulkanCommandBuffer;
 
 struct VulkanAttachment {
-    VulkanTexture* texture;
+    fvkmemory::resource_ptr<VulkanTexture> texture;
     uint8_t level = 0;
-    uint16_t layer = 0;
+    uint8_t layerCount = 1;
+    uint8_t layer = 0;
+
+    bool isDepth() const;
     VkImage getImage() const;
     VkFormat getFormat() const;
     VulkanLayout getLayout() const;
     VkExtent2D getExtent2D() const;
-    VkImageView getImageView(VkImageAspectFlags aspect);
+    VkImageView getImageView();
     // TODO: maybe embed aspect into the attachment or texture itself.
-    VkImageSubresourceRange getSubresourceRange(VkImageAspectFlags aspect) const;
+    VkImageSubresourceRange getSubresourceRange() const;
 };
 
 class VulkanTimestamps {
@@ -68,9 +74,11 @@ public:
     std::tuple<uint32_t, uint32_t> getNextQuery();
     void clearQuery(uint32_t queryIndex);
 
-    void beginQuery(VulkanCommandBuffer const* commands, VulkanTimerQuery* query);
-    void endQuery(VulkanCommandBuffer const* commands, VulkanTimerQuery const* query);
-    QueryResult getResult(VulkanTimerQuery const* query);
+    void beginQuery(VulkanCommandBuffer const* commands,
+            fvkmemory::resource_ptr<VulkanTimerQuery> query);
+    void endQuery(VulkanCommandBuffer const* commands,
+            fvkmemory::resource_ptr<VulkanTimerQuery> query);
+    QueryResult getResult(fvkmemory::resource_ptr<VulkanTimerQuery> query);
 
 private:
     VkDevice mDevice;
@@ -80,7 +88,9 @@ private:
 };
 
 struct VulkanRenderPass {
-    VulkanRenderTarget* renderTarget;
+    // Between the begin and end command render pass we cache the command buffer
+    VulkanCommandBuffer* commandBuffer;
+    fvkmemory::resource_ptr<VulkanRenderTarget> renderTarget;
     VkRenderPass renderPass;
     RenderPassParams params;
     int currentSubpass;
@@ -91,6 +101,9 @@ struct VulkanRenderPass {
 struct VulkanContext {
 public:
     inline uint32_t selectMemoryType(uint32_t flags, VkFlags reqs) const {
+        if ((reqs & VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0) {
+            assert_invariant(isProtectedMemorySupported() == true);
+        }
         for (uint32_t i = 0; i < VK_MAX_MEMORY_TYPES; i++) {
             if (flags & 1) {
                 if ((mMemoryProperties.memoryTypes[i].propertyFlags & reqs) == reqs) {
@@ -102,37 +115,81 @@ public:
         return (uint32_t) VK_MAX_MEMORY_TYPES;
     }
 
-    inline VkFormatList const& getAttachmentDepthFormats() const {
-        return mDepthFormats;
+    inline fvkutils::VkFormatList const& getAttachmentDepthStencilFormats() const {
+        return mDepthStencilFormats;
+    }
+
+    inline fvkutils::VkFormatList const& getBlittableDepthStencilFormats() const {
+        return mBlittableDepthStencilFormats;
     }
 
     inline VkPhysicalDeviceLimits const& getPhysicalDeviceLimits() const noexcept {
-        return mPhysicalDeviceProperties.limits;
+        return mPhysicalDeviceProperties.properties.limits;
     }
 
     inline uint32_t getPhysicalDeviceVendorId() const noexcept {
-        return mPhysicalDeviceProperties.vendorID;
+        return mPhysicalDeviceProperties.properties.vendorID;
     }
 
     inline bool isImageCubeArraySupported() const noexcept {
-        return mPhysicalDeviceFeatures.imageCubeArray;
+        return mPhysicalDeviceFeatures.features.imageCubeArray == VK_TRUE;
+    }
+
+    inline bool isDepthClampSupported() const noexcept {
+        return mPhysicalDeviceFeatures.features.depthClamp == VK_TRUE;
     }
 
     inline bool isDebugMarkersSupported() const noexcept {
         return mDebugMarkersSupported;
     }
+
     inline bool isDebugUtilsSupported() const noexcept {
         return mDebugUtilsSupported;
     }
 
+    inline bool isMultiviewEnabled() const noexcept {
+        return mMultiviewEnabled;
+    }
+
+    inline bool isClipDistanceSupported() const noexcept {
+        return mPhysicalDeviceFeatures.features.shaderClipDistance == VK_TRUE;
+    }
+
+    inline bool isLazilyAllocatedMemorySupported() const noexcept {
+        return mLazilyAllocatedMemorySupported;
+    }
+
+    inline bool isProtectedMemorySupported() const noexcept {
+        return mProtectedMemorySupported;
+    }
+
+    inline bool isImageView2DOn3DImageSupported() const noexcept {
+        return mPortabilitySubsetFeatures.imageView2DOn3DImage == VK_TRUE;
+    }
+
 private:
     VkPhysicalDeviceMemoryProperties mMemoryProperties = {};
-    VkPhysicalDeviceProperties mPhysicalDeviceProperties = {};
-    VkPhysicalDeviceFeatures mPhysicalDeviceFeatures = {};
+    VkPhysicalDeviceProperties2 mPhysicalDeviceProperties = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+    };
+    VkPhysicalDeviceFeatures2 mPhysicalDeviceFeatures = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+    };
+    VkPhysicalDevicePortabilitySubsetFeaturesKHR mPortabilitySubsetFeatures = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR,
+        // By default, on platforms where we don't have portability subset, then this feature must
+        // exists.  We only fill this struct only when portability subset is needed (i.e.
+        // non-conformant vulkan implementation).
+        .imageView2DOn3DImage = VK_TRUE,
+    };
     bool mDebugMarkersSupported = false;
     bool mDebugUtilsSupported = false;
+    bool mMultiviewEnabled = false;
+    bool mLazilyAllocatedMemorySupported = false;
+    bool mProtectedMemorySupported = false;
 
-    VkFormatList mDepthFormats;
+    fvkutils::VkFormatList mDepthStencilFormats;
+    fvkutils::VkFormatList mBlittableDepthStencilFormats;
 
     // For convenience so that VulkanPlatform can initialize the private fields.
     friend class VulkanPlatform;

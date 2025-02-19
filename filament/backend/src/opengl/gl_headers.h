@@ -56,7 +56,7 @@
     #   define FILAMENT_SILENCE_NOT_SUPPORTED_BY_ES2
     #endif
 
-#elif defined(IOS)
+#elif defined(FILAMENT_IOS)
 
     #define GLES_SILENCE_DEPRECATION
 
@@ -81,7 +81,7 @@
 #if defined(GL_VERSION_4_5)
 #elif defined(GL_ES_VERSION_3_1)
 #elif defined(GL_ES_VERSION_3_0)
-#   if !defined(IOS) && !defined(__EMSCRIPTEN__)
+#   if !defined(FILAMENT_IOS) && !defined(__EMSCRIPTEN__)
 #       error "GLES 3.0 headers only supported on iOS and WebGL2"
 #   endif
 #elif defined(GL_ES_VERSION_2_0)
@@ -98,7 +98,7 @@
 
 #if defined(GL_ES_VERSION_2_0)  // this basically means all versions of GLES
 
-#if defined(IOS)
+#if defined(FILAMENT_IOS)
 
 // iOS headers only provide prototypes, nothing to do.
 
@@ -151,6 +151,9 @@ extern PFNGLDISCARDFRAMEBUFFEREXTPROC glDiscardFramebufferEXT;
 #ifdef GL_KHR_parallel_shader_compile
 extern PFNGLMAXSHADERCOMPILERTHREADSKHRPROC glMaxShaderCompilerThreadsKHR;
 #endif
+#ifdef GL_OVR_multiview
+extern PFNGLFRAMEBUFFERTEXTUREMULTIVIEWOVRPROC glFramebufferTextureMultiviewOVR;
+#endif
 #if defined(__ANDROID__) && !defined(FILAMENT_SILENCE_NOT_SUPPORTED_BY_ES2)
 extern PFNGLDISPATCHCOMPUTEPROC glDispatchCompute;
 #endif
@@ -196,6 +199,12 @@ using namespace glext;
 #else
 #   define GL_CLIP_DISTANCE0                        0x3000
 #   define GL_CLIP_DISTANCE1                        0x3001
+#endif
+
+#if defined(GL_EXT_depth_clamp)
+#   define GL_DEPTH_CLAMP                           GL_DEPTH_CLAMP_EXT
+#else
+#   define GL_DEPTH_CLAMP                           0x864F
 #endif
 
 #if defined(GL_KHR_debug)
@@ -262,7 +271,7 @@ void glGetBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, void *d
 #endif
 
 #ifdef GL_ES_VERSION_2_0
-#   ifndef IOS
+#   ifndef FILAMENT_IOS
 #      ifndef GL_OES_vertex_array_object
 #          error "Headers with GL_OES_vertex_array_object are mandatory unless on iOS"
 #      endif
