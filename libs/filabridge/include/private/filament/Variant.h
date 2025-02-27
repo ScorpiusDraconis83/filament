@@ -19,6 +19,7 @@
 
 #include <filament/MaterialEnums.h>
 
+#include <utils/compiler.h>
 #include <utils/bitset.h>
 #include <utils/Slice.h>
 
@@ -115,7 +116,7 @@ struct Variant {
     inline bool hasDirectionalLighting() const noexcept { return key & DIR; }
     inline bool hasDynamicLighting() const noexcept     { return key & DYN; }
     inline bool hasSkinningOrMorphing() const noexcept  { return key & SKN; }
-    inline bool hasInstancedStereo() const noexcept     { return key & STE; }
+    inline bool hasStereo() const noexcept              { return key & STE; }
 
     inline void setDirectionalLighting(bool v) noexcept { set(v, DIR); }
     inline void setDynamicLighting(bool v) noexcept     { set(v, DYN); }
@@ -271,6 +272,8 @@ namespace VariantUtils {
 utils::Slice<Variant> getLitVariants() noexcept UTILS_PURE;
 // list of unlit variants
 utils::Slice<Variant> getUnlitVariants() noexcept UTILS_PURE;
+// list of depth variants
+utils::Slice<Variant> getDepthVariants() noexcept UTILS_PURE;
 }
 
 } // namespace filament
