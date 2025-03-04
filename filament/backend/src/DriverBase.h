@@ -49,21 +49,25 @@ struct AcquiredImage;
 struct HwBase {
 };
 
-struct HwVertexBuffer : public HwBase {
-    AttributeArray attributes{};          // 8 * MAX_VERTEX_ATTRIBUTE_COUNT
-    uint32_t vertexCount{};               //   4
+
+struct HwVertexBufferInfo : public HwBase {
     uint8_t bufferCount{};                //   1
     uint8_t attributeCount{};             //   1
-    bool padding{};                       //   1
-    uint8_t bufferObjectsVersion{};       //   1 -> total struct is 136 bytes
-
-    HwVertexBuffer() noexcept = default;
-    HwVertexBuffer(uint8_t bufferCount, uint8_t attributeCount, uint32_t elementCount,
-            AttributeArray const& attributes) noexcept
-            : attributes(attributes),
-              vertexCount(elementCount),
-              bufferCount(bufferCount),
+    bool padding[2]{};                    //   2
+    HwVertexBufferInfo() noexcept = default;
+    HwVertexBufferInfo(uint8_t bufferCount, uint8_t attributeCount) noexcept
+            : bufferCount(bufferCount),
               attributeCount(attributeCount) {
+    }
+};
+
+struct HwVertexBuffer : public HwBase {
+    uint32_t vertexCount{};               //   4
+    uint8_t bufferObjectsVersion{0xff};   //   1
+    bool padding[3]{};                    //   2
+    HwVertexBuffer() noexcept = default;
+    explicit HwVertexBuffer(uint32_t vertextCount) noexcept
+            : vertexCount(vertextCount) {
     }
 };
 
@@ -88,11 +92,6 @@ struct HwIndexBuffer : public HwBase {
 };
 
 struct HwRenderPrimitive : public HwBase {
-    uint32_t offset{};
-    uint32_t minIndex{};
-    uint32_t maxIndex{};
-    uint32_t count{};
-    uint32_t maxVertexCount{};
     PrimitiveType type = PrimitiveType::TRIANGLES;
 };
 
@@ -102,8 +101,12 @@ struct HwProgram : public HwBase {
     HwProgram() noexcept = default;
 };
 
-struct HwSamplerGroup : public HwBase {
-    HwSamplerGroup() noexcept = default;
+struct HwDescriptorSetLayout : public HwBase {
+    HwDescriptorSetLayout() noexcept = default;
+};
+
+struct HwDescriptorSet : public HwBase {
+    HwDescriptorSet() noexcept = default;
 };
 
 struct HwTexture : public HwBase {
@@ -114,7 +117,9 @@ struct HwTexture : public HwBase {
     uint8_t levels : 4;  // This allows up to 15 levels (max texture size of 32768 x 32768)
     uint8_t samples : 4; // Sample count per pixel (should always be a power of 2)
     TextureFormat format{};
+    uint8_t reserved0 = 0;
     TextureUsage usage{};
+    uint16_t reserved1 = 0;
     HwStream* hwStream = nullptr;
 
     HwTexture() noexcept : levels{}, samples{} {}
