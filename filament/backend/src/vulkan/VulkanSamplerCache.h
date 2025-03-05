@@ -18,7 +18,6 @@
 #define TNT_FILAMENT_BACKEND_VULKANSAMPLERCACHE_H
 
 #include "VulkanContext.h"
-#include "VulkanUtility.h"
 
 #include <tsl/robin_map.h>
 
@@ -27,7 +26,7 @@ namespace filament::backend {
 // Simple manager for VkSampler objects.
 class VulkanSamplerCache {
 public:
-    void initialize(VkDevice device);
+    explicit VulkanSamplerCache(VkDevice device);
     VkSampler getSampler(SamplerParams params) noexcept;
     void terminate() noexcept;
 private:

@@ -369,8 +369,8 @@ using EntityVector = std::vector<utils::Entity>;
 
 register_vector<std::string>("RegistryKeys");
 register_vector<utils::Entity>("EntityVector");
-register_vector<FilamentInstance*>("AssetInstanceVector");
-register_vector<MaterialInstance*>("MaterialInstanceVector");
+register_vector<allow_raw_pointer<FilamentInstance*>>("AssetInstanceVector");
+register_vector<allow_raw_pointer<MaterialInstance*>>("MaterialInstanceVector");
 
 // CORE FILAMENT CLASSES
 // ---------------------
@@ -387,6 +387,10 @@ class_<Engine>("Engine")
         });
         return Engine::create();
     }, allow_raw_pointers())
+
+    .class_function("getSteadyClockTimeNano", &Engine::getSteadyClockTimeNano)
+
+    .function("unprotected", &Engine::unprotected)
 
     .function("enableAccurateTranslations", &Engine::enableAccurateTranslations)
 
@@ -576,6 +580,12 @@ class_<Engine>("Engine")
     .function("isValidMaterial", EMBIND_LAMBDA(bool, (Engine* engine, Material* object), {
                 return engine->isValid(object);
             }), allow_raw_pointers())
+    .function("isValidMaterialInstance", EMBIND_LAMBDA(bool, (Engine* engine, Material* ma, MaterialInstance* mi), {
+                return engine->isValid(ma, mi);
+            }), allow_raw_pointers())
+    .function("isValidExpensiveMaterialInstance", EMBIND_LAMBDA(bool, (Engine* engine, MaterialInstance* object), {
+                return engine->isValidExpensive(object);
+            }), allow_raw_pointers())
     .function("isValidSkybox", EMBIND_LAMBDA(bool, (Engine* engine, Skybox* object), {
                 return engine->isValid(object);
             }), allow_raw_pointers())
@@ -615,6 +625,9 @@ class_<Renderer>("Renderer")
     }), allow_raw_pointers())
     .function("_setClearOptions", &Renderer::setClearOptions, allow_raw_pointers())
     .function("getClearOptions", &Renderer::getClearOptions)
+    .function("setPresentationTime", &Renderer::setPresentationTime)
+    .function("setVsyncTime", &Renderer::setVsyncTime)
+    .function("skipFrame", &Renderer::skipFrame)
     .function("beginFrame", EMBIND_LAMBDA(bool, (Renderer* self, SwapChain* swapChain), {
         return self->beginFrame(swapChain);
     }), allow_raw_pointers())
@@ -640,6 +653,7 @@ class_<View>("View")
 
     .function("setScene", &View::setScene, allow_raw_pointers())
     .function("setCamera", &View::setCamera, allow_raw_pointers())
+    .function("hasCamera", &View::hasCamera)
     .function("setColorGrading", &View::setColorGrading, allow_raw_pointers())
     .function("setBlendMode", &View::setBlendMode)
     .function("getBlendMode", &View::getBlendMode)
@@ -647,6 +661,7 @@ class_<View>("View")
     .function("getViewport", &View::getViewport)
     .function("setVisibleLayers", &View::setVisibleLayers)
     .function("setPostProcessingEnabled", &View::setPostProcessingEnabled)
+    .function("setDithering", &View::setDithering)
     .function("_setAmbientOcclusionOptions", &View::setAmbientOcclusionOptions)
     .function("_setDepthOfFieldOptions", &View::setDepthOfFieldOptions)
     .function("_setMultiSampleAntiAliasingOptions", &View::setMultiSampleAntiAliasingOptions)
@@ -666,11 +681,14 @@ class_<View>("View")
     .function("setRenderTarget", EMBIND_LAMBDA(void, (View* self, RenderTarget* renderTarget), {
         self->setRenderTarget(renderTarget);
     }), allow_raw_pointers())
+    .function("setTransparentPickingEnabled", &View::setTransparentPickingEnabled)
+    .function("isTransparentPickingEnabled", &View::isTransparentPickingEnabled)
     .function("setStencilBufferEnabled", &View::setStencilBufferEnabled)
     .function("isStencilBufferEnabled", &View::isStencilBufferEnabled)
     .function("setMaterialGlobal", &View::setMaterialGlobal)
     .function("getMaterialGlobal", &View::getMaterialGlobal)
-    .function("getFogEntity", &View::getFogEntity);
+    .function("getFogEntity", &View::getFogEntity)
+    .function("clearFrameHistory", &View::clearFrameHistory);
 
 /// Scene ::core class:: Flat container of renderables and lights.
 /// See also the [Engine] methods `createScene` and `destroyScene`.
@@ -938,6 +956,10 @@ class_<RenderableBuilder>("RenderableManager$Builder")
             size_t count), {
         return &builder->geometry(index, type, vertices, indices, offset, minIndex, maxIndex, count); })
 
+    .BUILDER_FUNCTION("geometryType", RenderableBuilder, (RenderableBuilder* builder,
+            RenderableManager::Builder::GeometryType type), {
+        return &builder->geometryType(type); })
+
     .BUILDER_FUNCTION("material", RenderableBuilder, (RenderableBuilder* builder,
             size_t index, MaterialInstance* mi), {
         return &builder->material(index, mi); })
@@ -1029,7 +1051,7 @@ class_<RenderableManager>("RenderableManager")
 
     .class_function("Builder", (RenderableBuilder (*)(int)) [] (int n) {
         return RenderableBuilder(n);
-    })
+    }, return_value_policy::take_ownership())
 
     .function("destroy", &RenderableManager::destroy)
     .function("setAxisAlignedBoundingBox", &RenderableManager::setAxisAlignedBoundingBox)
@@ -1079,6 +1101,7 @@ class_<RenderableManager>("RenderableManager")
     .function("getPrimitiveCount", &RenderableManager::getPrimitiveCount)
     .function("setMaterialInstanceAt", &RenderableManager::setMaterialInstanceAt,
             allow_raw_pointers())
+    .function("clearMaterialInstanceAt", &RenderableManager::clearMaterialInstanceAt)
     .function("getMaterialInstanceAt", &RenderableManager::getMaterialInstanceAt,
             allow_raw_pointers())
 
@@ -1369,8 +1392,14 @@ class_<MaterialInstance>("MaterialInstance")
     .function("isDoubleSided", &MaterialInstance::isDoubleSided)
     .function("setTransparencyMode", &MaterialInstance::setTransparencyMode)
     .function("getTransparencyMode", &MaterialInstance::getTransparencyMode)
-    .function("setCullingMode", &MaterialInstance::setCullingMode)
+    .function("setCullingMode", EMBIND_LAMBDA(void,
+            (MaterialInstance* self, MaterialInstance::CullingMode mode), {
+        self->setCullingMode(mode); }), allow_raw_pointers())
+    .function("setCullingModeSeparate", EMBIND_LAMBDA(void,
+            (MaterialInstance* self, MaterialInstance::CullingMode color, MaterialInstance::CullingMode shadows), {
+        self->setCullingMode(color, shadows); }), allow_raw_pointers())
     .function("getCullingMode", &MaterialInstance::getCullingMode)
+    .function("getShadowCullingMode", &MaterialInstance::getShadowCullingMode)
     .function("setColorWrite", &MaterialInstance::setColorWrite)
     .function("isColorWriteEnabled", &MaterialInstance::isColorWriteEnabled)
     .function("setDepthWrite", &MaterialInstance::setDepthWrite)
@@ -1424,6 +1453,8 @@ class_<TextureSampler>("TextureSampler")
 /// Texture ::core class:: 2D image or cubemap that can be sampled by the GPU, possibly mipmapped.
 class_<Texture>("Texture")
     .class_function("Builder", (TexBuilder (*)()) [] { return TexBuilder(); })
+    .class_function("isTextureFormatMipmappable", &Texture::isTextureFormatMipmappable)
+    .class_function("validatePixelFormatAndType", &Texture::validatePixelFormatAndType)
     .function("generateMipmaps", &Texture::generateMipmaps)
     .function("_setImage", EMBIND_LAMBDA(void, (Texture* self,
             Engine* engine, uint8_t level, PixelBufferDescriptor pbd), {
@@ -1468,6 +1499,8 @@ class_<TexBuilder>("Texture$Builder")
         return &builder->sampler(target); })
     .BUILDER_FUNCTION("format", TexBuilder, (TexBuilder* builder, Texture::InternalFormat fmt), {
         return &builder->format(fmt); })
+    .BUILDER_FUNCTION("external", TexBuilder, (TexBuilder* builder), {
+        return &builder->external(); })
 
     // This takes a bitfield that can be composed by or'ing constants.
     // - JS clients should use the value member, as in: "Texture$Usage.SAMPLEABLE.value".
