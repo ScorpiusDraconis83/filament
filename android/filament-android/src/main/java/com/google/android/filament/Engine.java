@@ -139,6 +139,10 @@ public class Engine {
          */
         METAL,
         /**
+         * Select the WebGPU driver if platform supports it.
+         */
+        WEBGPU,
+        /**
          * Selects the no-op driver for testing purposes.
          */
         NOOP,
@@ -156,6 +160,19 @@ public class Engine {
         FEATURE_LEVEL_2,
         /** OpenGL ES 3.1 features + 31 textures units + cubemap arrays */
         FEATURE_LEVEL_3,
+    };
+
+    /**
+     * The type of technique for stereoscopic rendering. (Note that the materials used will need to be
+     * compatible with the chosen technique.)
+     */
+    public enum StereoscopicType {
+        /** No stereoscopic rendering. */
+        NONE,
+        /** Stereoscopic rendering is performed using instanced rendering technique. */
+        INSTANCED,
+        /** Stereoscopic rendering is performed using the multiview feature from the graphics backend. */
+        MULTIVIEW,
     };
 
     /**
@@ -211,7 +228,12 @@ public class Engine {
             nSetBuilderConfig(mNativeBuilder, config.commandBufferSizeMB,
                     config.perRenderPassArenaSizeMB, config.driverHandleArenaSizeMB,
                     config.minCommandBufferSizeMB, config.perFrameCommandsSizeMB,
-                    config.jobSystemThreadCount, config.stereoscopicEyeCount);
+                    config.jobSystemThreadCount, config.disableParallelShaderCompile,
+                    config.stereoscopicType.ordinal(), config.stereoscopicEyeCount,
+                    config.resourceAllocatorCacheSizeMB, config.resourceAllocatorCacheMaxAge,
+                    config.disableHandleUseAfterFreeCheck,
+                    config.preferredShaderLanguage.ordinal(),
+                    config.forceGLES2Context, config.assertNativeWindowIsValid);
             return this;
         }
 
@@ -223,6 +245,31 @@ public class Engine {
          */
         public Builder featureLevel(FeatureLevel featureLevel) {
             nSetBuilderFeatureLevel(mNativeBuilder, featureLevel.ordinal());
+            return this;
+        }
+
+        /**
+         * Sets the initial paused state of the rendering thread.
+         *
+         * <p>Warning: This is an experimental API. See {@link Engine#setPaused(boolean)} for
+         * caveats.
+         *
+         * @param paused Whether to start the rendering thread paused.
+         * @return A reference to this Builder for chaining calls.
+         */
+        public Builder paused(boolean paused) {
+            nSetBuilderPaused(mNativeBuilder, paused);
+            return this;
+        }
+
+        /**
+         * Set a feature flag value. This is the only way to set constant feature flags.
+         * @param name feature name
+         * @param value true to enable, false to disable
+         * @return A reference to this Builder for chaining calls.
+         */
+        public Builder feature(@NonNull String name, boolean value) {
+            nSetBuilderFeature(mNativeBuilder, name, value);
             return this;
         }
 
@@ -349,6 +396,36 @@ public class Engine {
         public long jobSystemThreadCount = 0;
 
         /**
+         * Number of most-recently destroyed textures to track for use-after-free.
+         *
+         * This will cause the backend to throw an exception when a texture is freed but still bound
+         * to a SamplerGroup and used in a draw call. 0 disables completely.
+         *
+         * Currently only respected by the Metal backend.
+         */
+        public long textureUseAfterFreePoolSize = 0;
+
+        /**
+         * Set to `true` to forcibly disable parallel shader compilation in the backend.
+         * Currently only honored by the GL backend.
+         * @Deprecated use "backend.disable_parallel_shader_compile" feature flag instead
+         */
+        public boolean disableParallelShaderCompile = false;
+
+        /**
+         * The type of technique for stereoscopic rendering.
+         *
+         * This setting determines the algorithm used when stereoscopic rendering is enabled. This
+         * decision applies to the entire Engine for the lifetime of the Engine. E.g., multiple
+         * Views created from the Engine must use the same stereoscopic type.
+         *
+         * Each view can enable stereoscopic rendering via the StereoscopicOptions::enable flag.
+         *
+         * @see View#setStereoscopicOptions
+         */
+        public StereoscopicType stereoscopicType = StereoscopicType.NONE;
+
+        /**
          * The number of eyes to render when stereoscopic rendering is enabled. Supported values are
          * between 1 and Engine#getMaxStereoscopicEyes() (inclusive).
          *
@@ -356,6 +433,62 @@ public class Engine {
          * @see Engine#getMaxStereoscopicEyes
          */
         public long stereoscopicEyeCount = 2;
+
+        /**
+         * @Deprecated This value is no longer used.
+         */
+        public long resourceAllocatorCacheSizeMB = 64;
+
+        /**
+         * This value determines how many frames texture entries are kept for in the cache. This
+         * is a soft limit, meaning some texture older than this are allowed to stay in the cache.
+         * Typically only one texture is evicted per frame.
+         * The default is 1.
+         */
+        public long resourceAllocatorCacheMaxAge = 1;
+
+        /**
+         * Disable backend handles use-after-free checks.
+         * @Deprecated use "backend.disable_handle_use_after_free_check" feature flag instead
+         */
+        public boolean disableHandleUseAfterFreeCheck = false;
+
+        /**
+         * Sets a preferred shader language for Filament to use.
+         *
+         * The Metal backend supports two shader languages: MSL (Metal Shading Language) and
+         * METAL_LIBRARY (precompiled .metallib). This option controls which shader language is
+         * used when materials contain both.
+         *
+         * By default, when preferredShaderLanguage is unset, Filament will prefer METAL_LIBRARY
+         * shaders if present within a material, falling back to MSL. Setting
+         * preferredShaderLanguage to ShaderLanguage::MSL will instead instruct Filament to check
+         * for the presence of MSL in a material first, falling back to METAL_LIBRARY if MSL is not
+         * present.
+         *
+         * When using a non-Metal backend, setting this has no effect.
+         */
+        public enum ShaderLanguage {
+            DEFAULT,
+            MSL,
+            METAL_LIBRARY,
+        };
+        public ShaderLanguage preferredShaderLanguage = ShaderLanguage.DEFAULT;
+
+        /**
+         * When the OpenGL ES backend is used, setting this value to true will force a GLES2.0
+         * context if supported by the Platform, or if not, will have the backend pretend
+         * it's a GLES2 context. Ignored on other backends.
+         */
+        public boolean forceGLES2Context = false;
+
+        /**
+         * Assert the native window associated to a SwapChain is valid when calling makeCurrent().
+         * This is only supported for:
+         *      - PlatformEGLAndroid
+         * @Deprecated use "backend.opengl.assert_native_window_is_valid" feature flag instead
+         */
+        public boolean assertNativeWindowIsValid = false;
     }
 
     private Engine(long nativeEngine, Config config) {
@@ -578,11 +711,11 @@ public class Engine {
 
     /**
      * Returns the maximum number of stereoscopic eyes supported by Filament. The actual number of
-     * eyes rendered is set at Engine creation time with the {@link
-     * Engine#Config#stereoscopicEyeCount} setting.
+     * eyes rendered is set at Engine creation time with the {@link Config#stereoscopicEyeCount}
+     * setting.
      *
      * @return the max number of stereoscopic eyes supported
-     * @see Engine#Config#stereoscopicEyeCount
+     * @see Config#stereoscopicEyeCount
      */
     public long getMaxStereoscopicEyes() {
         return nGetMaxStereoscopicEyes(getNativeObject());
@@ -602,7 +735,7 @@ public class Engine {
      */
     @NonNull
     public SwapChain createSwapChain(@NonNull Object surface) {
-        return createSwapChain(surface, SwapChain.CONFIG_DEFAULT);
+        return createSwapChain(surface, SwapChainFlags.CONFIG_DEFAULT);
     }
 
     /**
@@ -610,15 +743,15 @@ public class Engine {
      *
      * @param surface on Android, <b>must be</b> an instance of {@link android.view.Surface}
      *
-     * @param flags configuration flags, see {@link SwapChain}
+     * @param flags configuration flags, see {@link SwapChainFlags}
      *
      * @return a newly created {@link SwapChain} object
      *
      * @exception IllegalStateException can be thrown if the SwapChain couldn't be created
      *
-     * @see SwapChain#CONFIG_DEFAULT
-     * @see SwapChain#CONFIG_TRANSPARENT
-     * @see SwapChain#CONFIG_READABLE
+     * @see SwapChainFlags#CONFIG_DEFAULT
+     * @see SwapChainFlags#CONFIG_TRANSPARENT
+     * @see SwapChainFlags#CONFIG_READABLE
      *
      */
     @NonNull
@@ -636,21 +769,22 @@ public class Engine {
      *
      * @param width  width of the rendering buffer
      * @param height height of the rendering buffer
-     * @param flags  configuration flags, see {@link SwapChain}
+     * @param flags  configuration flags, see {@link SwapChainFlags}
      *
      * @return a newly created {@link SwapChain} object
      *
      * @exception IllegalStateException can be thrown if the SwapChain couldn't be created
      *
-     * @see SwapChain#CONFIG_DEFAULT
-     * @see SwapChain#CONFIG_TRANSPARENT
-     * @see SwapChain#CONFIG_READABLE
+     * @see SwapChainFlags#CONFIG_DEFAULT
+     * @see SwapChainFlags#CONFIG_TRANSPARENT
+     * @see SwapChainFlags#CONFIG_READABLE
      *
      */
     @NonNull
     public SwapChain createSwapChain(int width, int height, long flags) {
         if (width >= 0 && height >= 0) {
-            long nativeSwapChain = nCreateSwapChainHeadless(getNativeObject(), width, height, flags);
+            long nativeSwapChain =
+                nCreateSwapChainHeadless(getNativeObject(), width, height, flags);
             if (nativeSwapChain == 0) throw new IllegalStateException("Couldn't create SwapChain");
             return new SwapChain(nativeSwapChain, null);
         }
@@ -662,11 +796,12 @@ public class Engine {
      *
      * @param surface a properly initialized {@link NativeSurface}
      *
-     * @param flags configuration flags, see {@link SwapChain}
+     * @param flags configuration flags, see {@link SwapChainFlags}
      *
      * @return a newly created {@link SwapChain} object
      *
-     * @exception IllegalStateException can be thrown if the {@link SwapChain} couldn't be created
+     * @exception IllegalStateException can be thrown if the {@link SwapChainFlags} couldn't be
+     *            created
      */
     @NonNull
     public SwapChain createSwapChainFromNativeSurface(@NonNull NativeSurface surface, long flags) {
@@ -773,6 +908,25 @@ public class Engine {
      */
     public boolean isValidMaterial(@NonNull Material object) {
         return nIsValidMaterial(getNativeObject(), object.getNativeObject());
+    }
+
+    /**
+     * Returns whether the object is valid.
+     * @param ma Material
+     * @param mi MaterialInstance to check for validity
+     * @return returns true if the specified object is valid.
+     */
+    public boolean isValidMaterialInstance(@NonNull Material ma, MaterialInstance mi) {
+        return nIsValidMaterialInstance(getNativeObject(), ma.getNativeObject(), mi.getNativeObject());
+    }
+
+    /**
+     * Returns whether the object is valid.
+     * @param object Object to check for validity
+     * @return returns true if the specified object is valid.
+     */
+    public boolean isValidExpensiveMaterialInstance(@NonNull MaterialInstance object) {
+        return nIsValidExpensiveMaterialInstance(getNativeObject(), object.getNativeObject());
     }
 
     /**
@@ -1121,7 +1275,28 @@ public class Engine {
      * {@link  android.view.SurfaceHolder.Callback#surfaceDestroyed surfaceDestroyed}.</p>
      */
     public void flushAndWait() {
-        nFlushAndWait(getNativeObject());
+        boolean unused = flushAndWait(Fence.WAIT_FOR_EVER);
+    }
+
+    /**
+     * Kicks the hardware thread (e.g. the OpenGL, Vulkan or Metal thread) and blocks until
+     * all commands to this point are executed. Note that does guarantee that the
+     * hardware is actually finished.
+     *
+     * A timeout can be specified, if for some reason this flushAndWait doesn't complete before the timeout, it will
+     * return false, true otherwise.
+     *
+     * <p>This is typically used right after destroying the <code>SwapChain</code>,
+     * in cases where a guarantee about the <code>SwapChain</code> destruction is needed in a
+     * timely fashion, such as when responding to Android's
+     * <code>android.view.SurfaceHolder.Callback.surfaceDestroyed</code></p>
+     *
+     * @param timeout A timeout in nanoseconds
+     * @return true if successful, false if flushAndWait timed out, in which case it wasn't successful and commands
+     * might still be executing on both the CPU and GPU sides.
+     */
+    public boolean flushAndWait(long timeout) {
+        return nFlushAndWait(getNativeObject(), timeout);
     }
 
     /**
@@ -1135,6 +1310,84 @@ public class Engine {
         nFlush(getNativeObject());
     }
 
+    /**
+     * Get paused state of rendering thread.
+     *
+     * <p>Warning: This is an experimental API.
+     *
+     * @see #setPaused
+     */
+    public boolean isPaused() {
+        return nIsPaused(getNativeObject());
+    }
+
+    /**
+     * Pause or resume the rendering thread.
+     *
+     * <p>Warning: This is an experimental API. In particular, note the following caveats.
+     *
+     * <ul><li>
+     * Buffer callbacks will never be called as long as the rendering thread is paused.
+     * Do not rely on a buffer callback to unpause the thread.
+     * </li><li>
+     * While the rendering thread is paused, rendering commands will continue to be queued until the
+     * buffer limit is reached. When the limit is reached, the program will abort.
+     * </li></ul>
+     */
+    public void setPaused(boolean paused) {
+        nSetPaused(getNativeObject(), paused);
+    }
+
+    /**
+     * Switch the command queue to unprotected mode. Protected mode can be activated via
+     * Renderer::beginFrame() using a protected SwapChain.
+     * @see Renderer
+     * @see SwapChain
+     */
+    public void unprotected() {
+        nUnprotected(getNativeObject());
+    }
+
+    /**
+     * Get the current time. This is a convenience function that simply returns the
+     * time in nanosecond since epoch of std::chrono::steady_clock.
+     * @return current time in nanosecond since epoch of std::chrono::steady_clock.
+     * @see Renderer#beginFrame
+     */
+    public static native long getSteadyClockTimeNano();
+
+
+    /**
+     * Checks if a feature flag exists
+     * @param name name of the feature flag to check
+     * @return true if it exists false otherwise
+     */
+    public boolean hasFeatureFlag(@NonNull String name) {
+        return nHasFeatureFlag(mNativeObject, name);
+    }
+
+    /**
+     * Set the value of a non-constant feature flag.
+     * @param name name of the feature flag to set
+     * @param value value to set
+     * @return true if the value was set, false if the feature flag is constant or doesn't exist.
+     */
+    public boolean setFeatureFlag(@NonNull String name, boolean value) {
+        return nSetFeatureFlag(mNativeObject, name, value);
+    }
+
+    /**
+     * Retrieves the value of any feature flag.
+     * @param name name of the feature flag
+     * @return the value of the flag if it exists
+     * @exception IllegalArgumentException is thrown if the feature flag doesn't exist
+     */
+    public boolean getFeatureFlag(@NonNull String name) {
+        if (!hasFeatureFlag(name)) {
+            throw new IllegalArgumentException("The feature flag \"" + name + "\" doesn't exist");
+        }
+        return nGetFeatureFlag(mNativeObject, name);
+    }
 
     @UsedByReflection("TextureHelper.java")
     public long getNativeObject() {
@@ -1201,14 +1454,19 @@ public class Engine {
     private static native boolean nIsValidSkinningBuffer(long nativeEngine, long nativeSkinningBuffer);
     private static native boolean nIsValidIndirectLight(long nativeEngine, long nativeIndirectLight);
     private static native boolean nIsValidMaterial(long nativeEngine, long nativeMaterial);
+    private static native boolean nIsValidMaterialInstance(long nativeEngine, long nativeMaterial, long nativeMaterialInstance);
+    private static native boolean nIsValidExpensiveMaterialInstance(long nativeEngine, long nativeMaterialInstance);
     private static native boolean nIsValidSkybox(long nativeEngine, long nativeSkybox);
     private static native boolean nIsValidColorGrading(long nativeEngine, long nativeColorGrading);
     private static native boolean nIsValidTexture(long nativeEngine, long nativeTexture);
     private static native boolean nIsValidRenderTarget(long nativeEngine, long nativeTarget);
     private static native boolean nIsValidSwapChain(long nativeEngine, long nativeSwapChain);
     private static native void nDestroyEntity(long nativeEngine, int entity);
-    private static native void nFlushAndWait(long nativeEngine);
+    private static native boolean nFlushAndWait(long nativeEngine, long timeout);
     private static native void nFlush(long nativeEngine);
+    private static native boolean nIsPaused(long nativeEngine);
+    private static native void nSetPaused(long nativeEngine, boolean paused);
+    private static native void nUnprotected(long nativeEngine);
     private static native long nGetTransformManager(long nativeEngine);
     private static native long nGetLightManager(long nativeEngine);
     private static native long nGetRenderableManager(long nativeEngine);
@@ -1220,6 +1478,9 @@ public class Engine {
     private static native int nGetSupportedFeatureLevel(long nativeEngine);
     private static native int nSetActiveFeatureLevel(long nativeEngine, int ordinal);
     private static native int nGetActiveFeatureLevel(long nativeEngine);
+    private static native boolean nHasFeatureFlag(long nativeEngine, String name);
+    private static native boolean nSetFeatureFlag(long nativeEngine, String name, boolean value);
+    private static native boolean nGetFeatureFlag(long nativeEngine, String name);
 
     private static native long nCreateBuilder();
     private static native void nDestroyBuilder(long nativeBuilder);
@@ -1227,8 +1488,14 @@ public class Engine {
     private static native void nSetBuilderConfig(long nativeBuilder, long commandBufferSizeMB,
             long perRenderPassArenaSizeMB, long driverHandleArenaSizeMB,
             long minCommandBufferSizeMB, long perFrameCommandsSizeMB, long jobSystemThreadCount,
-            long stereoscopicEyeCount);
+            boolean disableParallelShaderCompile, int stereoscopicType, long stereoscopicEyeCount,
+            long resourceAllocatorCacheSizeMB, long resourceAllocatorCacheMaxAge,
+            boolean disableHandleUseAfterFreeCheck,
+            int preferredShaderLanguage,
+            boolean forceGLES2Context, boolean assertNativeWindowIsValid);
     private static native void nSetBuilderFeatureLevel(long nativeBuilder, int ordinal);
     private static native void nSetBuilderSharedContext(long nativeBuilder, long sharedContext);
+    private static native void nSetBuilderPaused(long nativeBuilder, boolean paused);
+    private static native void nSetBuilderFeature(long nativeBuilder, String name, boolean value);
     private static native long nBuilderBuild(long nativeBuilder);
 }

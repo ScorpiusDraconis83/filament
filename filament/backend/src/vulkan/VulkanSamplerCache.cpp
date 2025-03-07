@@ -15,6 +15,7 @@
  */
 
 #include "vulkan/VulkanSamplerCache.h"
+#include "vulkan/utils/Conversion.h"
 
 #include <utils/Panic.h>
 
@@ -95,7 +96,8 @@ constexpr inline VkBool32 getCompareEnable(SamplerCompareMode mode) noexcept {
     return mode == SamplerCompareMode::NONE ? VK_FALSE : VK_TRUE;
 }
 
-void VulkanSamplerCache::initialize(VkDevice device) { mDevice = device; }
+VulkanSamplerCache::VulkanSamplerCache(VkDevice device)
+    : mDevice(device) {}
 
 VkSampler VulkanSamplerCache::getSampler(SamplerParams params) noexcept {
     auto iter = mCache.find(params);
@@ -113,15 +115,16 @@ VkSampler VulkanSamplerCache::getSampler(SamplerParams params) noexcept {
         .anisotropyEnable = params.anisotropyLog2 == 0 ? 0u : 1u,
         .maxAnisotropy = (float)(1u << params.anisotropyLog2),
         .compareEnable = getCompareEnable(params.compareMode),
-        .compareOp = getCompareOp(params.compareFunc),
+        .compareOp = fvkutils::getCompareOp(params.compareFunc),
         .minLod = 0.0f,
         .maxLod = getMaxLod(params.filterMin),
         .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
         .unnormalizedCoordinates = VK_FALSE
     };
     VkSampler sampler;
-    VkResult error = vkCreateSampler(mDevice, &samplerInfo, VKALLOC, &sampler);
-    ASSERT_POSTCONDITION(!error, "Unable to create sampler.");
+    VkResult result = vkCreateSampler(mDevice, &samplerInfo, VKALLOC, &sampler);
+    FILAMENT_CHECK_POSTCONDITION(result == VK_SUCCESS) << "Unable to create sampler."
+                                                       << " error=" << static_cast<int32_t>(result);
     mCache.insert({params, sampler});
     return sampler;
 }

@@ -27,7 +27,7 @@ using namespace math;
 
 namespace aces {
 
-inline float rgb_2_saturation(float3 rgb) {
+inline float rgb_2_saturation(float3 const rgb) {
     // Input:  ACES
     // Output: OCES
     constexpr float TINY = 1e-5f;
@@ -36,7 +36,7 @@ inline float rgb_2_saturation(float3 rgb) {
     return (max(ma, TINY) - max(mi, TINY)) / max(ma, 1e-2f);
 }
 
-inline float rgb_2_yc(float3 rgb) {
+inline float rgb_2_yc(float3 const rgb) {
     constexpr float ycRadiusWeight = 1.75f;
 
     // Converts RGB to a luminance proxy, here called YC
@@ -61,14 +61,14 @@ inline float rgb_2_yc(float3 rgb) {
     return (b + g + r + ycRadiusWeight * chroma) / 3.0f;
 }
 
-inline float sigmoid_shaper(float x) {
+inline float sigmoid_shaper(float const x) {
     // Sigmoid function in the range 0 to 1 spanning -2 to +2.
     float t = max(1.0f - std::abs(x / 2.0f), 0.0f);
     float y = 1.0f + sign(x) * (1.0f - t * t);
     return y / 2.0f;
 }
 
-inline float glow_fwd(float ycIn, float glowGainIn, float glowMid) {
+inline float glow_fwd(float const ycIn, float const glowGainIn, float const glowMid) {
     float glowGainOut;
 
     if (ycIn <= 2.0f / 3.0f * glowMid) {
@@ -82,7 +82,7 @@ inline float glow_fwd(float ycIn, float glowGainIn, float glowMid) {
     return glowGainOut;
 }
 
-inline float rgb_2_hue(float3 rgb) {
+inline float rgb_2_hue(float3 const rgb) {
     // Returns a geometric hue angle in degrees (0-360) based on RGB values.
     // For neutral colors, hue is undefined and the function will return a quiet NaN value.
     float hue = 0.0f;
@@ -95,7 +95,7 @@ inline float rgb_2_hue(float3 rgb) {
     return (hue < 0.0f) ? hue + 360.0f : hue;
 }
 
-inline float center_hue(float hue, float centerH) {
+inline float center_hue(float const hue, float const centerH) {
     float hueCentered = hue - centerH;
     if (hueCentered < -180.0f) {
         hueCentered = hueCentered + 360.0f;
@@ -198,7 +198,7 @@ DEFAULT_CONSTRUCTORS(ToneMapper)
 
 DEFAULT_CONSTRUCTORS(LinearToneMapper)
 
-float3 LinearToneMapper::operator()(float3 v) const noexcept {
+float3 LinearToneMapper::operator()(float3 const v) const noexcept {
     return saturate(v);
 }
 
@@ -208,19 +208,19 @@ float3 LinearToneMapper::operator()(float3 v) const noexcept {
 
 DEFAULT_CONSTRUCTORS(ACESToneMapper)
 
-float3 ACESToneMapper::operator()(math::float3 c) const noexcept {
+float3 ACESToneMapper::operator()(float3 const c) const noexcept {
     return aces::ACES(c, 1.0f);
 }
 
 DEFAULT_CONSTRUCTORS(ACESLegacyToneMapper)
 
-float3 ACESLegacyToneMapper::operator()(math::float3 c) const noexcept {
+float3 ACESLegacyToneMapper::operator()(float3 const c) const noexcept {
     return aces::ACES(c, 1.0f / 0.6f);
 }
 
 DEFAULT_CONSTRUCTORS(FilmicToneMapper)
 
-float3 FilmicToneMapper::operator()(math::float3 x) const noexcept {
+float3 FilmicToneMapper::operator()(float3 const x) const noexcept {
     // Narkowicz 2015, "ACES Filmic Tone Mapping Curve"
     constexpr float a = 2.51f;
     constexpr float b = 0.03f;
@@ -231,10 +231,36 @@ float3 FilmicToneMapper::operator()(math::float3 x) const noexcept {
 }
 
 //------------------------------------------------------------------------------
+// PBR Neutral tone mapper
+//------------------------------------------------------------------------------
+
+DEFAULT_CONSTRUCTORS(PBRNeutralToneMapper)
+
+float3 PBRNeutralToneMapper::operator()(float3 color) const noexcept {
+    // PBR Tone Mapping, https://modelviewer.dev/examples/tone-mapping.html
+    constexpr float startCompression = 0.8f - 0.04f;
+    constexpr float desaturation = 0.15f;
+
+    float x = min(color.r, min(color.g, color.b));
+    float offset = x < 0.08f ? x - 6.25f * x * x : 0.04f;
+    color -= offset;
+
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < startCompression) return color;
+
+    float d = 1.0f - startCompression;
+    float newPeak = 1.0f - d * d / (peak + d - startCompression);
+    color *= newPeak / peak;
+
+    float g = 1.0f - 1.0f / (desaturation * (peak - newPeak) + 1.0f);
+    return mix(color, float3(newPeak), g);
+}
+
+//------------------------------------------------------------------------------
 // AgX tone mapper
 //------------------------------------------------------------------------------
 
-AgxToneMapper::AgxToneMapper(AgxToneMapper::AgxLook look) noexcept : look(look) {}
+AgxToneMapper::AgxToneMapper(AgxLook const look) noexcept : look(look) {}
 AgxToneMapper::~AgxToneMapper() noexcept = default;
 
 // These matrices taken from Blender's implementation of AgX, which works with Rec.2020 primaries.
@@ -262,14 +288,14 @@ float3 agxDefaultContrastApprox(float3 x) {
     float3 x2 = x * x;
     float3 x4 = x2 * x2;
     float3 x6 = x4 * x2;
-    return  - 17.86     * x6 * x
-            + 78.01     * x6
-            - 126.7     * x4 * x
-            + 92.06     * x4
-            - 28.72     * x2 * x
-            + 4.361     * x2
-            - 0.1718    * x
-            + 0.002857;
+    return  - 17.86f    * x6 * x
+            + 78.01f    * x6
+            - 126.7f    * x4 * x
+            + 92.06f    * x4
+            - 28.72f    * x2 * x
+            + 4.361f    * x2
+            - 0.1718f   * x
+            + 0.002857f;
 }
 
 // Adapted from https://iolite-engine.com/blog_posts/minimal_agx_implementation
@@ -278,23 +304,23 @@ float3 agxLook(float3 val, AgxToneMapper::AgxLook look) {
         return val;
     }
 
-    const float3 lw = float3(0.2126, 0.7152, 0.0722);
+    const float3 lw = float3(0.2126f, 0.7152f, 0.0722f);
     float luma = dot(val, lw);
 
     // Default
-    float3 offset = float3(0.0);
-    float3 slope = float3(1.0);
-    float3 power = float3(1.0);
-    float sat = 1.0;
+    float3 offset = float3(0.0f);
+    float3 slope = float3(1.0f);
+    float3 power = float3(1.0f);
+    float sat = 1.0f;
 
     if (look == AgxToneMapper::AgxLook::GOLDEN) {
-        slope = float3(1.0, 0.9, 0.5);
-        power = float3(0.8);
+        slope = float3(1.0f, 0.9f, 0.5f);
+        power = float3(0.8f);
         sat = 1.3;
     }
     if (look == AgxToneMapper::AgxLook::PUNCHY) {
-        slope = float3(1.0);
-        power = float3(1.35, 1.35, 1.35);
+        slope = float3(1.0f);
+        power = float3(1.35f, 1.35f, 1.35f);
         sat = 1.4;
     }
 
@@ -305,16 +331,16 @@ float3 agxLook(float3 val, AgxToneMapper::AgxLook look) {
 
 float3 AgxToneMapper::operator()(float3 v) const noexcept {
     // Ensure no negative values
-    v = max(float3(0.0), v);
+    v = max(float3(0.0f), v);
 
     v = AgXInsetMatrix * v;
 
     // Log2 encoding
-    v = max(v, 1E-10); // avoid 0 or negative numbers for log2
+    v = max(v, 1E-10f); // avoid 0 or negative numbers for log2
     v = log2(v);
     v = (v - AgxMinEv) / (AgxMaxEv - AgxMinEv);
 
-    v = clamp(v, 0, 1);
+    v = clamp(v, 0.0f, 1.0f);
 
     // Apply sigmoid
     v = agxDefaultContrastApprox(v);
@@ -325,7 +351,7 @@ float3 AgxToneMapper::operator()(float3 v) const noexcept {
     v = AgXOutsetMatrix * v;
 
     // Linearize
-    v = pow(max(float3(0.0), v), 2.2);
+    v = pow(max(float3(0.0f), v), 2.2f);
 
     return v;
 }
@@ -336,7 +362,7 @@ float3 AgxToneMapper::operator()(float3 v) const noexcept {
 
 DEFAULT_CONSTRUCTORS(DisplayRangeToneMapper)
 
-float3 DisplayRangeToneMapper::operator()(math::float3 c) const noexcept {
+float3 DisplayRangeToneMapper::operator()(float3 const c) const noexcept {
     // 16 debug colors + 1 duplicated at the end for easy indexing
     constexpr float3 debugColors[17] = {
             {0.0,     0.0,     0.0},         // black
@@ -373,8 +399,10 @@ float3 DisplayRangeToneMapper::operator()(math::float3 c) const noexcept {
 //------------------------------------------------------------------------------
 
 struct GenericToneMapper::Options {
+#if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wshadow"
+#endif
     void setParameters(
             float contrast,
             float midGrayIn,
@@ -398,7 +426,9 @@ struct GenericToneMapper::Options {
         inputScale = (a * b * (midGrayOut - 1.0f)) / c;
         outputScale = midGrayOut * (a - b) / c;
     }
+#if defined(__clang__)
 #pragma clang diagnostic pop
+#endif
 
     float contrast;
     float midGrayIn;
@@ -411,10 +441,10 @@ struct GenericToneMapper::Options {
 };
 
 GenericToneMapper::GenericToneMapper(
-        float contrast,
-        float midGrayIn,
-        float midGrayOut,
-        float hdrMax
+        float const contrast,
+        float const midGrayIn,
+        float const midGrayOut,
+        float const hdrMax
 ) noexcept {
     mOptions = new Options();
     mOptions->setParameters(contrast, midGrayIn, midGrayOut, hdrMax);
@@ -434,7 +464,7 @@ GenericToneMapper& GenericToneMapper::operator=(GenericToneMapper&& rhs) noexcep
     return *this;
 }
 
-float3 GenericToneMapper::operator()(math::float3 x) const noexcept {
+float3 GenericToneMapper::operator()(float3 x) const noexcept {
     x = pow(x, mOptions->contrast);
     return mOptions->outputScale * x / (x + mOptions->inputScale);
 }
@@ -444,7 +474,7 @@ float GenericToneMapper::getMidGrayIn() const noexcept { return  mOptions->midGr
 float GenericToneMapper::getMidGrayOut() const noexcept { return  mOptions->midGrayOut; }
 float GenericToneMapper::getHdrMax() const noexcept { return  mOptions->hdrMax; }
 
-void GenericToneMapper::setContrast(float contrast) noexcept {
+void GenericToneMapper::setContrast(float const contrast) noexcept {
     mOptions->setParameters(
             contrast,
             mOptions->midGrayIn,
@@ -452,7 +482,7 @@ void GenericToneMapper::setContrast(float contrast) noexcept {
             mOptions->hdrMax
     );
 }
-void GenericToneMapper::setMidGrayIn(float midGrayIn) noexcept {
+void GenericToneMapper::setMidGrayIn(float const midGrayIn) noexcept {
     mOptions->setParameters(
             mOptions->contrast,
             midGrayIn,
@@ -461,7 +491,7 @@ void GenericToneMapper::setMidGrayIn(float midGrayIn) noexcept {
     );
 }
 
-void GenericToneMapper::setMidGrayOut(float midGrayOut) noexcept {
+void GenericToneMapper::setMidGrayOut(float const midGrayOut) noexcept {
     mOptions->setParameters(
             mOptions->contrast,
             mOptions->midGrayIn,
@@ -470,7 +500,7 @@ void GenericToneMapper::setMidGrayOut(float midGrayOut) noexcept {
     );
 }
 
-void GenericToneMapper::setHdrMax(float hdrMax) noexcept {
+void GenericToneMapper::setHdrMax(float const hdrMax) noexcept {
     mOptions->setParameters(
             mOptions->contrast,
             mOptions->midGrayIn,

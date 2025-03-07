@@ -7,8 +7,187 @@ A new header is inserted each time a *tag* is created.
 Instead, if you are authoring a PR for the main branch, add your release note to
 [NEW_RELEASE_NOTES.md](./NEW_RELEASE_NOTES.md).
 
+## v1.57.3
+
+- android: breaking changes to API KTX1Loader::createIndirectLight and KTX1Loader::createSkybox
+
+## v1.57.2
+
+- Support including PlatformMetal.h in C++ files.
+
+## v1.57.1
+
+
+## v1.57.0
+
+- matdbg: Add support for debugging ESSL 1.0 shaders
+- backend: New platform API to better handle external textures [⚠️ **New Material Version**]
+
+## v1.56.8
+
+
+## v1.56.7
+
+
+## v1.56.6
+
+fix crash: the 'target_node' of Animation Channel may be nullpointer.
+
+## v1.56.5
+
+
+## v1.56.4
+
+
+## v1.56.3
+
+
+## v1.56.2
+
+- vk: fix stage pool gc logic
+
+## v1.56.1
+
+## v1.56.0
+
+- backend: descriptor layouts distinguish samplers and external samplers (b/376089915) [⚠️ **New Material Version**]
+
+## v1.55.1
+
+
+## v1.55.0
+- Add descriptor sets to describe shader resources. [⚠️ **New Material Version**]
+
+## v1.54.5
+
+
+## v1.54.4
+
+- Add support for multi-layered render target with array textures.
+
+## v1.54.3
+
+
+## v1.54.2
+
+- Add a `name` API to Filament objects for debugging handle use-after-free assertions
+
+## v1.54.1
+
+
+## v1.54.0
+
+- materials: add a new `stereoscopicType` material parameter. [⚠️ **New Material Version**]
+- Fix a crash when compiling shaders on IMG devices
+
+## v1.53.5
+
+- engine: Fix bug causing certain sampler parameters to not be applied correctly in GLES 2.0 and on
+  certain GLES 3.0 drivers.
+
+## v1.53.4
+
+
+## v1.53.3
+
+- Add drag and drop support for IBL files for desktop gltf_viewer.
+
+## v1.53.2
+
+
+## v1.53.1
+
+
+## v1.53.0
+
+- engine: fix skinning normals with large transforms (b/342459864) [⚠️ **New Material Version**]
+
+## v1.52.3
+
+
+## v1.52.2
+
+
+## v1.52.1
+
+- Add instructions for using Mesa for software rasterization
+
+## v1.51.9
+
+
+## v1.51.8
+
+- filagui: Fix regression which broke WebGL
+- Add a new Engine::Config setting to control preferred shader language
+- Add `getEyeIndex` vertex API
+- ios: Remove bitcode from iOS builds
+
+## v1.51.7
+
+- Add new matedit tool
+- filagui: Support rendering `GL_TEXTURE_EXTERNAL_OES` textures.
+- `setFrameScheduledCallback` now takes a `utils::Invocable`.
+- engine: Add `isPaused()`
+
+## v1.51.6
+
+- Add new matedit tool
+- filagui: Support rendering `GL_TEXTURE_EXTERNAL_OES` textures.
+
+## v1.51.5
+
+
+## v1.51.4
+
+
+## v1.51.3
+
+
+## v1.51.2
+
+- engine: Add experimental APIs `Engine::builder::paused()` and `Engine::setPaused()`
+
+## v1.51.1
+
+
+## v1.51.0
+
+- materials: add support for post-lighting mix factor (b/328498606) [⚠️ **New Material Version**]
+
+## v1.50.6
+
+- Add new API `SwapChain::getFrameScheduledCallback`
+- vulkan: fixed validation error VUID-vkAcquireNextImageKHR-semaphore-01779
+- opengl: Add support for protected content swapchains and contexts
+
+## v1.50.5
+
+- android: NDK 26.1.10909125 is used by default
+- android: Minimum API level on Android is now API 21 instead of API 19. This allows the use of OpenGL ES 3.1
+- rendering: New PBR Neutral tone mapper, designed to preserve materials color appearance
+- android: Change default frameRateOptions.interval to 1.0
+
+## v1.50.4
+
+
+## v1.50.3
+
+
+## v1.50.2
+
+
+## v1.50.1
+
+- Metal: fix some shader artifacts by disabling fast math optimizations.
+- backend: remove `atan2` overload which had a typo and wasn't useful. Fixes b/320856413.
+- utils: remove usages of `SpinLock`. Fixes b/321101014.
+
+## v1.50.0
+- engine: TAA now supports 4x upscaling [BETA] [⚠️ **New Material Version**]
+
 ## v1.49.3
 
+- matc: Generate stereo variants for FL0 materials [⚠️ **Recompile materials**]
 
 ## v1.49.2
 
@@ -520,7 +699,7 @@ Instead, if you are authoring a PR for the main branch, add your release note to
 
 - engine: Binary size improvements.
 - engine: Add basic support for instanced renderables [**NEW API**].
-- engine: Fix, first imaged passsed to `Stream::SetAcquiredImage` is ignored and leaked.
+- engine: Fix, first imaged passed to `Stream::SetAcquiredImage` is ignored and leaked.
 - Vulkan: Robustness improvements.
 - Java: Fix, lookAt z axis negated.
 - gltfio: Be graceful when model has > 4 weights per vert.

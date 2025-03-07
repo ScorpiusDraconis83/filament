@@ -52,8 +52,8 @@ FScene::FScene(FEngine& engine) :
 FScene::~FScene() noexcept = default;
 
 
-void FScene::prepare(utils::JobSystem& js,
-        LinearAllocatorArena& allocator,
+void FScene::prepare(JobSystem& js,
+        RootArenaScope& rootArenaScope,
         mat4 const& worldTransform,
         bool shadowReceiversAreCasters) noexcept {
     // TODO: can we skip this in most cases? Since we rely on indices staying the same,
@@ -64,7 +64,7 @@ void FScene::prepare(utils::JobSystem& js,
     SYSTRACE_CONTEXT();
 
     // This will reset the allocator upon exiting
-    ArenaScope const arena(allocator);
+    ArenaScope<RootArenaScope::Arena> localArenaScope(rootArenaScope.getArena());
 
     FEngine& engine = mEngine;
     EntityManager const& em = engine.getEntityManager();
@@ -78,17 +78,17 @@ void FScene::prepare(utils::JobSystem& js,
 
     using RenderableContainerData = std::pair<RenderableManager::Instance, TransformManager::Instance>;
     using RenderableInstanceContainer = FixedCapacityVector<RenderableContainerData,
-            utils::STLAllocator< RenderableContainerData, LinearAllocatorArena >, false>;
+            STLAllocator< RenderableContainerData, LinearAllocatorArena >, false>;
 
     using LightContainerData = std::pair<LightManager::Instance, TransformManager::Instance>;
     using LightInstanceContainer = FixedCapacityVector<LightContainerData,
-            utils::STLAllocator< LightContainerData, LinearAllocatorArena >, false>;
+            STLAllocator< LightContainerData, LinearAllocatorArena >, false>;
 
     RenderableInstanceContainer renderableInstances{
-            RenderableInstanceContainer::with_capacity(entities.size(), allocator) };
+            RenderableInstanceContainer::with_capacity(entities.size(), localArenaScope.getArena()) };
 
     LightInstanceContainer lightInstances{
-            LightInstanceContainer::with_capacity(entities.size(), allocator) };
+            LightInstanceContainer::with_capacity(entities.size(), localArenaScope.getArena()) };
 
     SYSTRACE_NAME_BEGIN("InstanceLoop");
 
@@ -148,7 +148,7 @@ void FScene::prepare(utils::JobSystem& js,
 
     // TODO: the resize below could happen in a job
 
-    if (sceneData.size() != renderableInstances.size()) {
+    if (!sceneData.capacity() || sceneData.size() != renderableInstances.size()) {
         sceneData.clear();
         if (sceneData.capacity() < renderableDataCapacity) {
             sceneData.setCapacity(renderableDataCapacity);
@@ -246,11 +246,11 @@ void FScene::prepare(utils::JobSystem& js,
 
     JobSystem::Job* rootJob = js.createJob();
 
-    auto* renderableJob = jobs::parallel_for(js, rootJob,
+    auto* renderableJob = parallel_for(js, rootJob,
             renderableInstances.data(), renderableInstances.size(),
-            std::cref(renderableWork), jobs::CountSplitter<128, 5>());
+            std::cref(renderableWork), jobs::CountSplitter<64>());
 
-    auto* lightJob = jobs::parallel_for(js, rootJob,
+    auto* lightJob = parallel_for(js, rootJob,
             lightInstances.data(), lightInstances.size(),
             std::cref(lightWork), jobs::CountSplitter<32, 5>());
 
@@ -388,9 +388,6 @@ void FScene::updateUBOs(
     SYSTRACE_CALL();
     FEngine::DriverApi& driver = mEngine.getDriverApi();
 
-    // store the UBO handle
-    mRenderableViewUbh = renderableUbh;
-
     // don't allocate more than 16 KiB directly into the render stream
     static constexpr size_t MAX_STREAM_ALLOCATION_COUNT = 64;   // 16 KiB
     const size_t count = visibleRenderables.size();
@@ -431,7 +428,7 @@ void FScene::updateUBOs(
     driver.resetBufferObject(renderableUbh);
     driver.updateBufferObjectUnsynchronized(renderableUbh, {
             buffer, count * sizeof(PerRenderableData),
-            +[](void* p, size_t s, void* user) {
+            +[](void* p, size_t const s, void* user) {
                 std::weak_ptr<SharedState>* const weakShared =
                         static_cast<std::weak_ptr<SharedState>*>(user);
                 if (s >= MAX_STREAM_ALLOCATION_COUNT * sizeof(PerRenderableData)) {
@@ -442,23 +439,16 @@ void FScene::updateUBOs(
                 delete weakShared;
             }, weakShared
     }, 0);
-
-    // update skybox
-    if (mSkybox) {
-        mSkybox->commit(driver);
-    }
 }
 
 void FScene::terminate(FEngine&) {
-    // DO NOT destroy this UBO, it's owned by the View
-    mRenderableViewUbh.clear();
 }
 
-void FScene::prepareDynamicLights(const CameraInfo& camera, ArenaScope&,
+void FScene::prepareDynamicLights(const CameraInfo& camera,
         Handle<HwBufferObject> lightUbh) noexcept {
     FEngine::DriverApi& driver = mEngine.getDriverApi();
     FLightManager const& lcm = mEngine.getLightManager();
-    FScene::LightSoa& lightData = getLightData();
+    LightSoa& lightData = getLightData();
 
     /*
      * Here we copy our lights data into the GPU buffer.
@@ -469,17 +459,17 @@ void FScene::prepareDynamicLights(const CameraInfo& camera, ArenaScope&,
     size_t const positionalLightCount = size - DIRECTIONAL_LIGHTS_COUNT;
     assert_invariant(positionalLightCount);
 
-    float4 const* const UTILS_RESTRICT spheres = lightData.data<FScene::POSITION_RADIUS>();
+    float4 const* const UTILS_RESTRICT spheres = lightData.data<POSITION_RADIUS>();
 
     // compute the light ranges (needed when building light trees)
-    float2* const zrange = lightData.data<FScene::SCREEN_SPACE_Z_RANGE>();
+    float2* const zrange = lightData.data<SCREEN_SPACE_Z_RANGE>();
     computeLightRanges(zrange, camera, spheres + DIRECTIONAL_LIGHTS_COUNT, positionalLightCount);
 
     LightsUib* const lp = driver.allocatePod<LightsUib>(positionalLightCount);
 
-    auto const* UTILS_RESTRICT directions       = lightData.data<FScene::DIRECTION>();
-    auto const* UTILS_RESTRICT instances        = lightData.data<FScene::LIGHT_INSTANCE>();
-    auto const* UTILS_RESTRICT shadowInfo       = lightData.data<FScene::SHADOW_INFO>();
+    auto const* UTILS_RESTRICT directions       = lightData.data<DIRECTION>();
+    auto const* UTILS_RESTRICT instances        = lightData.data<LIGHT_INSTANCE>();
+    auto const* UTILS_RESTRICT shadowInfo       = lightData.data<SHADOW_INFO>();
     for (size_t i = DIRECTIONAL_LIGHTS_COUNT, c = size; i < c; ++i) {
         const size_t gpuIndex = i - DIRECTIONAL_LIGHTS_COUNT;
         auto li = instances[i];
@@ -535,25 +525,30 @@ inline void FScene::computeLightRanges(
 }
 
 UTILS_NOINLINE
-void FScene::addEntity(Entity entity) {
+void FScene::addEntity(Entity const entity) {
     mEntities.insert(entity);
 }
 
 UTILS_NOINLINE
-void FScene::addEntities(const Entity* entities, size_t count) {
+void FScene::addEntities(const Entity* entities, size_t const count) {
     mEntities.insert(entities, entities + count);
 }
 
 UTILS_NOINLINE
-void FScene::remove(Entity entity) {
+void FScene::remove(Entity const entity) {
     mEntities.erase(entity);
 }
 
 UTILS_NOINLINE
-void FScene::removeEntities(const Entity* entities, size_t count) {
+void FScene::removeEntities(const Entity* entities, size_t const count) {
     for (size_t i = 0; i < count; ++i, ++entities) {
         remove(*entities);
     }
+}
+
+UTILS_NOINLINE
+void FScene::removeAllEntities() noexcept {
+    mEntities.clear();
 }
 
 UTILS_NOINLINE
@@ -583,7 +578,7 @@ size_t FScene::getLightCount() const noexcept {
 }
 
 UTILS_NOINLINE
-bool FScene::hasEntity(Entity entity) const noexcept {
+bool FScene::hasEntity(Entity const entity) const noexcept {
     return mEntities.find(entity) != mEntities.end();
 }
 

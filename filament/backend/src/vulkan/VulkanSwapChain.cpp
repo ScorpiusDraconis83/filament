@@ -15,6 +15,8 @@
  */
 
 #include "VulkanSwapChain.h"
+
+#include "VulkanCommands.h"
 #include "VulkanTexture.h"
 
 #include <utils/FixedCapacityVector.h>
@@ -26,31 +28,24 @@ using namespace utils;
 namespace filament::backend {
 
 VulkanSwapChain::VulkanSwapChain(VulkanPlatform* platform, VulkanContext const& context,
-        VmaAllocator allocator, VulkanCommands* commands, VulkanStagePool& stagePool,
-        void* nativeWindow, uint64_t flags, VkExtent2D extent)
-    : VulkanResource(VulkanResourceType::SWAP_CHAIN),
-      mPlatform(platform),
+        fvkmemory::ResourceManager* resourceManager, VmaAllocator allocator,
+        VulkanCommands* commands, VulkanStagePool& stagePool, void* nativeWindow, uint64_t flags,
+        VkExtent2D extent)
+    : mPlatform(platform),
+      mResourceManager(resourceManager),
       mCommands(commands),
       mAllocator(allocator),
       mStagePool(stagePool),
       mHeadless(extent.width != 0 && extent.height != 0 && !nativeWindow),
       mFlushAndWaitOnResize(platform->getCustomization().flushAndWaitOnWindowResize),
-      mImageReady(VK_NULL_HANDLE),
+      mTransitionSwapChainImageLayoutForPresent(
+              platform->getCustomization().transitionSwapChainImageLayoutForPresent),
+      mLayerCount(1),
+      mCurrentSwapIndex(0),
       mAcquired(false),
       mIsFirstRenderPass(true) {
     swapChain = mPlatform->createSwapChain(nativeWindow, flags, extent);
-    ASSERT_POSTCONDITION(swapChain, "Unable to create swapchain");
-
-    VkSemaphoreCreateInfo const createInfo = {
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-    };
-
-    // No need to wait on this semaphore before drawing when in Headless mode.
-    if (!mHeadless) {
-        VkResult result =
-                vkCreateSemaphore(mPlatform->getDevice(), &createInfo, nullptr, &mImageReady);
-        ASSERT_POSTCONDITION(result == VK_SUCCESS, "Failed to create semaphore");
-    }
+    FILAMENT_CHECK_POSTCONDITION(swapChain) << "Unable to create swapchain";
 
     update();
 }
@@ -61,10 +56,10 @@ VulkanSwapChain::~VulkanSwapChain() {
     mCommands->flush();
     mCommands->wait();
 
+    mColors = {};
+    mDepth = {};
+
     mPlatform->destroy(swapChain);
-    if (mImageReady != VK_NULL_HANDLE) {
-        vkDestroySemaphore(mPlatform->getDevice(), mImageReady, VKALLOC);
-    }
 }
 
 void VulkanSwapChain::update() {
@@ -74,40 +69,56 @@ void VulkanSwapChain::update() {
     mColors.reserve(bundle.colors.size());
     VkDevice const device = mPlatform->getDevice();
 
-    for (auto const color: bundle.colors) {
-        mColors.push_back(std::make_unique<VulkanTexture>(device, mAllocator, mCommands, color,
-                bundle.colorFormat, 1, bundle.extent.width, bundle.extent.height,
-                TextureUsage::COLOR_ATTACHMENT, mStagePool, true /* heap allocated */));
+    TextureUsage depthUsage = TextureUsage::DEPTH_ATTACHMENT;
+    TextureUsage colorUsage = TextureUsage::COLOR_ATTACHMENT;
+    if (bundle.isProtected) {
+        depthUsage |= TextureUsage::PROTECTED;
+        colorUsage |= TextureUsage::PROTECTED;
     }
-    mDepth = std::make_unique<VulkanTexture>(device, mAllocator, mCommands, bundle.depth,
-            bundle.depthFormat, 1, bundle.extent.width, bundle.extent.height,
-            TextureUsage::DEPTH_ATTACHMENT, mStagePool, true /* heap allocated */);
+    for (auto const color: bundle.colors) {
+        auto colorTexture = fvkmemory::resource_ptr<VulkanTexture>::construct(mResourceManager,
+                device, mAllocator, mResourceManager, mCommands, color, VK_NULL_HANDLE,
+                bundle.colorFormat, 1, bundle.extent.width, bundle.extent.height, bundle.layerCount, colorUsage,
+                mStagePool);
+        mColors.push_back(colorTexture);
+    }
+
+    mDepth = fvkmemory::resource_ptr<VulkanTexture>::construct(mResourceManager, device,
+        mAllocator, mResourceManager, mCommands, bundle.depth, VK_NULL_HANDLE,
+        bundle.depthFormat, 1, bundle.extent.width, bundle.extent.height, bundle.layerCount, depthUsage,
+        mStagePool);
 
     mExtent = bundle.extent;
+    mLayerCount = bundle.layerCount;
 }
 
 void VulkanSwapChain::present() {
-    if (!mHeadless) {
-        VkCommandBuffer const cmdbuf = mCommands->get().buffer();
+    if (!mHeadless && mTransitionSwapChainImageLayoutForPresent) {
+        VulkanCommandBuffer& commands = mCommands->get();
         VkImageSubresourceRange const subresources{
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
-                .layerCount = 1,
+                .layerCount = mLayerCount,
         };
-        mColors[mCurrentSwapIndex]->transitionLayout(cmdbuf, subresources, VulkanLayout::PRESENT);
+        mColors[mCurrentSwapIndex]->transitionLayout(&commands, subresources, VulkanLayout::PRESENT);
     }
+
     mCommands->flush();
 
-    // We only present if it is not headless.  No-op for headless (but note that we still need the
-    // flush() in the above line).
+    // call the image ready wait function
+    if (mExplicitImageReadyWait != nullptr) {
+        mExplicitImageReadyWait(swapChain);
+    }
+
+    // We only present if it is not headless. No-op for headless.
     if (!mHeadless) {
         VkSemaphore const finishedDrawing = mCommands->acquireFinishedSignal();
         VkResult const result = mPlatform->present(swapChain, mCurrentSwapIndex, finishedDrawing);
-        ASSERT_POSTCONDITION(result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR ||
-                                     result == VK_ERROR_OUT_OF_DATE_KHR,
-                "Cannot present in swapchain.");
+        FILAMENT_CHECK_POSTCONDITION(result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR ||
+                result == VK_ERROR_OUT_OF_DATE_KHR)
+                << "Cannot present in swapchain. error=" << static_cast<int32_t>(result);
     }
 
     // We presented the last acquired buffer.
@@ -131,11 +142,14 @@ void VulkanSwapChain::acquire(bool& resized) {
         update();
     }
 
-    VkResult const result = mPlatform->acquire(swapChain, mImageReady, &mCurrentSwapIndex);
-    ASSERT_POSTCONDITION(result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR,
-            "Cannot acquire in swapchain.");
-    if (mImageReady != VK_NULL_HANDLE) {
-        mCommands->injectDependency(mImageReady);
+    VulkanPlatform::ImageSyncData imageSyncData;
+    VkResult const result = mPlatform->acquire(swapChain, &imageSyncData);
+    mCurrentSwapIndex = imageSyncData.imageIndex;
+    mExplicitImageReadyWait = imageSyncData.explicitImageReadyWait;
+    FILAMENT_CHECK_POSTCONDITION(result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)
+            << "Cannot acquire in swapchain. error=" << static_cast<int32_t>(result);
+    if (imageSyncData.imageReadySemaphore != VK_NULL_HANDLE) {
+        mCommands->injectDependency(imageSyncData.imageReadySemaphore);
     }
     mAcquired = true;
 }

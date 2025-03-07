@@ -101,7 +101,7 @@ public class Renderer {
         /**
          * Desired frame interval in unit of 1 / DisplayInfo.refreshRate.
          */
-        public float interval = 1.0f / 60.0f;
+        public float interval = 1.0f;
 
         /**
          * Additional headroom for the GPU as a ratio of the targetFrameTime.
@@ -282,6 +282,33 @@ public class Renderer {
      */
     public void setPresentationTime(long monotonicClockNanos) {
         nSetPresentationTime(getNativeObject(), monotonicClockNanos);
+    }
+
+    /**
+     * The use of this method is optional. It sets the VSYNC time expressed as the duration in
+     * nanosecond since epoch of std::chrono::steady_clock.
+     * If called, passing 0 to frameTimeNanos in Renderer.BeginFrame will use this
+     * time instead.
+     * @param steadyClockTimeNano duration in nanosecond since epoch of std::chrono::steady_clock
+     * @see Engine#getSteadyClockTimeNano
+     * @see Renderer#beginFrame
+     */
+    public void setVsyncTime(long steadyClockTimeNano) {
+        nSetVsyncTime(getNativeObject(), steadyClockTimeNano);
+    }
+
+    /**
+     * Call skipFrame when momentarily skipping frames, for instance if the content of the
+     * scene doesn't change.
+     *
+     * @param vsyncSteadyClockTimeNano The time in nanoseconds when the frame started being rendered,
+     *                       in the {@link System#nanoTime()} timebase. Divide this value by 1000000 to
+     *                       convert it to the {@link android.os.SystemClock#uptimeMillis()}
+     *                       time base. This typically comes from
+     *                       {@link android.view.Choreographer.FrameCallback}.
+     */
+    public void skipFrame(long vsyncSteadyClockTimeNano) {
+        nSkipFrame(getNativeObject(), vsyncSteadyClockTimeNano);
     }
 
     /**
@@ -702,6 +729,8 @@ public class Renderer {
     }
 
     private static native void nSetPresentationTime(long nativeObject, long monotonicClockNanos);
+    private static native void nSetVsyncTime(long nativeObject, long steadyClockTimeNano);
+    private static native void nSkipFrame(long nativeObject, long vsyncSteadyClockTimeNano);
     private static native boolean nBeginFrame(long nativeRenderer, long nativeSwapChain, long frameTimeNanos);
     private static native void nEndFrame(long nativeRenderer);
     private static native void nRender(long nativeRenderer, long nativeView);

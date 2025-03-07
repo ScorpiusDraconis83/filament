@@ -242,6 +242,15 @@ public class View {
     }
 
     /**
+     * Query whether a camera is set.
+     * @return true if a camera is set, false otherwise
+     * @see #setCamera
+     */
+    public boolean hasCamera() {
+        return nHasCamera(getNativeObject());
+    }
+
+    /**
      * Gets this View's associated Camera, or null if none has been assigned.
      *
      * @see #setCamera
@@ -737,6 +746,33 @@ public class View {
     }
 
     /**
+     * Returns true if transparent picking is enabled.
+     *
+     * @see #setTransparentPickingEnabled
+     */
+    public boolean isTransparentPickingEnabled() {
+        return nIsTransparentPickingEnabled(getNativeObject());
+    }
+
+    /**
+     * Enables or disables transparent picking. Disabled by default.
+     *
+     * When transparent picking is enabled, View::pick() will pick from both
+     * transparent and opaque renderables. When disabled, View::pick() will only
+     * pick from opaque renderables.
+     *
+     * <p>
+     * Transparent picking will create an extra pass for rendering depth
+     * from both transparent and opaque renderables. 
+     * </p>
+     *
+     * @param enabled true enables transparent picking, false disables it.
+     */
+    public void setTransparentPickingEnabled(boolean enabled) {
+        nSetTransparentPickingEnabled(getNativeObject(), enabled);
+    }
+
+    /**
      * Sets options relative to dynamic lighting for this view.
      *
      * <p>
@@ -1224,6 +1260,18 @@ public class View {
         return nGetFogEntity(getNativeObject());
     }
 
+    /**
+     * When certain temporal features are used (e.g.: TAA or Screen-space reflections), the view
+     * keeps a history of previous frame renders associated with the Renderer the view was last
+     * used with. When switching Renderer, it may be necessary to clear that history by calling
+     * this method. Similarly, if the whole content of the screen change, like when a cut-scene
+     * starts, clearing the history might be needed to avoid artifacts due to the previous frame
+     * being very different.
+     */
+    public void clearFrameHistory(Engine engine) {
+        nClearFrameHistory(getNativeObject(), engine.getNativeObject());
+    }
+
     public long getNativeObject() {
         if (mNativeObject == 0) {
             throw new IllegalStateException("Calling method on destroyed View");
@@ -1238,6 +1286,7 @@ public class View {
     private static native void nSetName(long nativeView, String name);
     private static native void nSetScene(long nativeView, long nativeScene);
     private static native void nSetCamera(long nativeView, long nativeCamera);
+    private static native boolean nHasCamera(long nativeView);
     private static native void nSetViewport(long nativeView, int left, int bottom, int width, int height);
     private static native void nSetVisibleLayers(long nativeView, int select, int value);
     private static native void nSetShadowingEnabled(long nativeView, boolean enabled);
@@ -1259,6 +1308,8 @@ public class View {
     private static native boolean nIsPostProcessingEnabled(long nativeView);
     private static native void nSetFrontFaceWindingInverted(long nativeView, boolean inverted);
     private static native boolean nIsFrontFaceWindingInverted(long nativeView);
+    private static native void nSetTransparentPickingEnabled(long nativeView, boolean enabled);
+    private static native boolean nIsTransparentPickingEnabled(long nativeView);
     private static native void nSetAmbientOcclusion(long nativeView, int ordinal);
     private static native int nGetAmbientOcclusion(long nativeView);
     private static native void nSetAmbientOcclusionOptions(long nativeView, float radius, float bias, float power, float resolution, float intensity, float bilateralThreshold, int quality, int lowPassFilter, int upsampling, boolean enabled, boolean bentNormals, float minHorizonAngleRad);
@@ -1284,7 +1335,7 @@ public class View {
     private static native void nSetMaterialGlobal(long nativeView, int index, float x, float y, float z, float w);
     private static native void nGetMaterialGlobal(long nativeView, int index, float[] out);
     private static native int nGetFogEntity(long nativeView);
-
+    private static native void nClearFrameHistory(long nativeView, long nativeEngine);
 
     /**
      * List of available ambient occlusion techniques.
@@ -1369,10 +1420,10 @@ public class View {
         /**
          * Upscaling quality
          * LOW:    bilinear filtered blit. Fastest, poor quality
-         * MEDIUM: AMD FidelityFX FSR1 w/ mobile optimizations
+         * MEDIUM: Qualcomm Snapdragon Game Super Resolution (SGSR) 1.0
          * HIGH:   AMD FidelityFX FSR1 w/ mobile optimizations
          * ULTRA:  AMD FidelityFX FSR1
-         *      FSR1 require a well anti-aliased (MSAA or TAA), noise free scene.
+         *      FSR1 and SGSR require a well anti-aliased (MSAA or TAA), noise free scene. Avoid FXAA and dithering.
          *
          * The default upscaling quality is set to LOW.
          */
@@ -1637,6 +1688,10 @@ public class View {
          * circle of confusion scale factor (amount of blur)
          */
         public float cocScale = 1.0f;
+        /**
+         * width/height aspect ratio of the circle of confusion (simulate anamorphic lenses)
+         */
+        public float cocAspectRatio = 1.0f;
         /**
          * maximum aperture diameter in meters (zero to disable rotation)
          */
@@ -1921,6 +1976,7 @@ public class View {
             UNIFORM_HELIX_X4,
             HALTON_23_X8,
             HALTON_23_X16,
+            HALTON_23_X32,
         }
 
         /**
@@ -1932,9 +1988,21 @@ public class View {
          */
         public float feedback = 0.12f;
         /**
+         * texturing lod bias (typically -1 or -2)
+         */
+        public float lodBias = -1.0f;
+        /**
+         * post-TAA sharpen, especially useful when upscaling is true.
+         */
+        public float sharpness = 0.0f;
+        /**
          * enables or disables temporal anti-aliasing
          */
         public boolean enabled = false;
+        /**
+         * 4x TAA upscaling. Disables Dynamic Resolution. [BETA]
+         */
+        public boolean upscaling = false;
         /**
          * whether to filter the history buffer
          */
